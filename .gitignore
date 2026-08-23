@@ -1,0 +1,4 @@
+/target/
+/.gyrfalcon/
+*.log
+.env

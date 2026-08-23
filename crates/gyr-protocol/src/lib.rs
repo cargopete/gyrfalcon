@@ -1,0 +1,156 @@
+//! Provider-neutral values exchanged by Gyrfalcon's model, core and frontend
+//! boundaries.
+//!
+//! Provider-native conversation history deliberately does not live here. An
+//! adapter owns that history so continuation does not lose reasoning items or
+//! provider-specific content ordering.
+
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    OpenAi,
+    Anthropic,
+    Qwen,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    None,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "efforts", rename_all = "snake_case")]
+pub enum ReasoningSupport {
+    None,
+    Toggle,
+    Effort(Vec<ReasoningEffort>),
+    ProviderManaged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SamplingDefaults {
+    pub temperature: f64,
+    pub top_p: f64,
+    pub top_k: Option<u32>,
+    pub min_p: Option<f64>,
+    pub presence_penalty: Option<f64>,
+    pub repetition_penalty: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelProfile {
+    /// Stable Gyrfalcon configuration key.
+    pub key: String,
+    /// Model identifier sent to the provider by default.
+    pub provider_model: String,
+    pub display_name: String,
+    pub provider: ProviderKind,
+    pub context_window_tokens: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub reasoning: ReasoningSupport,
+    pub parallel_tool_calls: bool,
+    pub image_input: bool,
+    pub tool_call_parser: Option<String>,
+    pub reasoning_parser: Option<String>,
+    pub sampling: Option<SamplingDefaults>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolOutput {
+    pub content: String,
+    pub is_error: bool,
+}
+
+impl ToolOutput {
+    #[must_use]
+    pub fn success(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            is_error: false,
+        }
+    }
+
+    #[must_use]
+    pub fn error(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            is_error: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub call_id: String,
+    pub output: ToolOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TurnInput {
+    User { content: String },
+    ToolResults { results: Vec<ToolResult> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    EndTurn,
+    ToolUse,
+    MaxTokens,
+    Refusal,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ModelEvent {
+    Started { response_id: Option<String> },
+    TextDelta { text: String },
+    ReasoningDelta { text: String },
+    ToolCallStarted { id: String, name: String },
+    ToolCallArgumentsDelta { id: String, delta: String },
+    ToolCallCompleted { call: ToolCall },
+    Usage { usage: TokenUsage },
+    Finished { reason: StopReason },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    Model { model_turn: u32, event: ModelEvent },
+    ToolStarted { model_turn: u32, call: ToolCall },
+    ToolFinished { model_turn: u32, result: ToolResult },
+}

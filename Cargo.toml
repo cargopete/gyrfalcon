@@ -1,0 +1,38 @@
+[workspace]
+members = [
+    "crates/gyr-cli",
+    "crates/gyr-core",
+    "crates/gyr-model",
+    "crates/gyr-protocol",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/cargopete/gyrfalcon"
+rust-version = "1.88"
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+async-stream = "0.3.6"
+clap = { version = "4.5.51", features = ["derive"] }
+futures-core = "0.3.31"
+futures-util = "0.3.31"
+gyr-core = { path = "crates/gyr-core" }
+gyr-model = { path = "crates/gyr-model" }
+gyr-protocol = { path = "crates/gyr-protocol" }
+pretty_assertions = "1.4.1"
+reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["io-util", "macros", "net", "rt", "rt-multi-thread"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
