@@ -1,0 +1,712 @@
+//! Bounded filesystem tools rooted in one canonical workspace.
+
+use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
+use gyr_core::ToolError;
+use gyr_core::ToolFuture;
+use gyr_core::ToolRuntime;
+use gyr_protocol::ToolCall;
+use gyr_protocol::ToolDefinition;
+use gyr_protocol::ToolOutput;
+use ignore::WalkBuilder;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
+use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolLimits {
+    pub max_read_lines: usize,
+    pub max_read_bytes: usize,
+    pub max_search_matches: usize,
+    pub max_search_bytes: usize,
+    pub max_search_files: usize,
+    pub max_search_file_bytes: u64,
+}
+
+impl Default for ToolLimits {
+    fn default() -> Self {
+        Self {
+            max_read_lines: 200,
+            max_read_bytes: 32 * 1_024,
+            max_search_matches: 200,
+            max_search_bytes: 64 * 1_024,
+            max_search_files: 20_000,
+            max_search_file_bytes: 2 * 1_024 * 1_024,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct WorkspaceTools {
+    root: PathBuf,
+    limits: ToolLimits,
+}
+
+impl WorkspaceTools {
+    /// Creates a tool runtime confined to an existing directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the root cannot be canonicalised or is not a
+    /// directory.
+    pub fn new(root: impl AsRef<Path>, limits: ToolLimits) -> Result<Self, ToolError> {
+        let root = fs::canonicalize(root.as_ref()).map_err(|error| {
+            ToolError::new(format!(
+                "cannot resolve workspace root {}: {error}",
+                root.as_ref().display()
+            ))
+        })?;
+        if !root.is_dir() {
+            return Err(ToolError::new(format!(
+                "workspace root is not a directory: {}",
+                root.display()
+            )));
+        }
+        Ok(Self { root, limits })
+    }
+
+    #[must_use]
+    pub fn definitions() -> Vec<ToolDefinition> {
+        vec![
+            ToolDefinition {
+                name: "read".into(),
+                description: "Read a bounded range from a UTF-8 file in the workspace.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "start_line": {"type": "integer", "minimum": 1},
+                        "end_line": {"type": "integer", "minimum": 1}
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDefinition {
+                name: "search".into(),
+                description:
+                    "Search UTF-8 workspace files for a literal string, respecting ignore files."
+                        .into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1},
+                        "path": {"type": "string"},
+                        "max_results": {"type": "integer", "minimum": 1}
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDefinition {
+                name: "apply_patch".into(),
+                description: "Replace one exact UTF-8 string in a previously read workspace file."
+                    .into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "old_text": {"type": "string", "minLength": 1},
+                        "new_text": {"type": "string"}
+                    },
+                    "required": ["path", "expected_sha256", "old_text", "new_text"],
+                    "additionalProperties": false
+                }),
+            },
+        ]
+    }
+
+    fn execute_sync(&self, call: &ToolCall) -> Result<ToolOutput, ToolError> {
+        match call.name.as_str() {
+            "read" => self.read(parse_arguments(&call.arguments, "read")?),
+            "search" => self.search(parse_arguments(&call.arguments, "search")?),
+            "apply_patch" => self.apply_patch(parse_arguments(&call.arguments, "apply_patch")?),
+            name => Err(ToolError::new(format!("unknown tool {name:?}"))),
+        }
+    }
+
+    fn read(&self, arguments: ReadArguments) -> Result<ToolOutput, ToolError> {
+        let path = self.resolve_existing_file(&arguments.path)?;
+        let bytes = fs::read(&path).map_err(|error| file_error("read", &path, &error))?;
+        let text = String::from_utf8(bytes.clone())
+            .map_err(|_| ToolError::new(format!("file is not valid UTF-8: {}", arguments.path)))?;
+        let total_lines = text.lines().count();
+        let start_line = arguments.start_line.unwrap_or(1);
+        if start_line == 0 {
+            return Err(ToolError::new("start_line must be at least 1"));
+        }
+        let requested_end = arguments.end_line.unwrap_or_else(|| {
+            start_line
+                .saturating_add(self.limits.max_read_lines)
+                .saturating_sub(1)
+        });
+        if requested_end < start_line {
+            return Err(ToolError::new("end_line must not precede start_line"));
+        }
+        let capped_end = requested_end.min(
+            start_line
+                .saturating_add(self.limits.max_read_lines)
+                .saturating_sub(1),
+        );
+        let end_line = capped_end.min(total_lines);
+        let mut content = String::new();
+        if start_line <= total_lines {
+            for (index, line) in text
+                .lines()
+                .enumerate()
+                .skip(start_line - 1)
+                .take(end_line - start_line + 1)
+            {
+                use std::fmt::Write as _;
+                writeln!(&mut content, "{:>6}\t{line}", index + 1)
+                    .expect("writing to a String cannot fail");
+            }
+        }
+        let byte_truncated = truncate_utf8(&mut content, self.limits.max_read_bytes);
+        let truncated = byte_truncated || end_line < requested_end.min(total_lines);
+        let output = ReadOutput {
+            path: arguments.path,
+            start_line,
+            end_line,
+            total_lines,
+            truncated,
+            sha256: fingerprint(&bytes),
+            content,
+        };
+        json_output(&output)
+    }
+
+    fn search(&self, arguments: SearchArguments) -> Result<ToolOutput, ToolError> {
+        if arguments.query.is_empty() {
+            return Err(ToolError::new("search query must not be empty"));
+        }
+        let relative_root = arguments.path.as_deref().unwrap_or(".");
+        let search_root = self.resolve_existing_directory(relative_root)?;
+        let result_limit = arguments
+            .max_results
+            .unwrap_or(self.limits.max_search_matches)
+            .min(self.limits.max_search_matches);
+        let mut builder = WalkBuilder::new(search_root);
+        builder
+            .follow_links(false)
+            .parents(false)
+            .require_git(false)
+            .max_filesize(Some(self.limits.max_search_file_bytes))
+            .sort_by_file_path(std::cmp::Ord::cmp);
+
+        let mut matches = Vec::new();
+        let mut total_matches = 0_usize;
+        let mut files_scanned = 0_usize;
+        let mut output_bytes = 0_usize;
+        let mut truncated = false;
+        for entry in builder.build() {
+            let entry =
+                entry.map_err(|error| ToolError::new(format!("search walk failed: {error}")))?;
+            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+                continue;
+            }
+            if files_scanned == self.limits.max_search_files {
+                truncated = true;
+                break;
+            }
+            files_scanned += 1;
+            let Ok(text) = fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            for (line_index, line) in text.lines().enumerate() {
+                for (column, _) in line.match_indices(&arguments.query) {
+                    total_matches += 1;
+                    if matches.len() == result_limit {
+                        truncated = true;
+                        continue;
+                    }
+                    let found = SearchMatch {
+                        path: display_relative(&self.root, entry.path())?,
+                        line: line_index + 1,
+                        column: column + 1,
+                        text: line.to_owned(),
+                    };
+                    let encoded_size = serde_json::to_vec(&found)
+                        .map_err(|error| {
+                            ToolError::new(format!("cannot encode search match: {error}"))
+                        })?
+                        .len();
+                    if output_bytes.saturating_add(encoded_size) > self.limits.max_search_bytes {
+                        truncated = true;
+                        continue;
+                    }
+                    output_bytes += encoded_size;
+                    matches.push(found);
+                }
+            }
+        }
+        let output = SearchOutput {
+            query: arguments.query,
+            files_scanned,
+            total_matches,
+            matches,
+            truncated,
+        };
+        json_output(&output)
+    }
+
+    fn apply_patch(&self, arguments: PatchArguments) -> Result<ToolOutput, ToolError> {
+        if arguments.old_text.is_empty() {
+            return Err(ToolError::new("old_text must not be empty"));
+        }
+        if arguments.old_text == arguments.new_text {
+            return Err(ToolError::new("patch would not change the file"));
+        }
+        let path = self.resolve_existing_file(&arguments.path)?;
+        let bytes = fs::read(&path).map_err(|error| file_error("read", &path, &error))?;
+        let before_sha256 = fingerprint(&bytes);
+        if before_sha256 != arguments.expected_sha256 {
+            return Err(ToolError::new(format!(
+                "stale file: expected SHA-256 {}, found {before_sha256}",
+                arguments.expected_sha256
+            )));
+        }
+        let text = String::from_utf8(bytes)
+            .map_err(|_| ToolError::new(format!("file is not valid UTF-8: {}", arguments.path)))?;
+        let occurrences = text.match_indices(&arguments.old_text).count();
+        if occurrences != 1 {
+            return Err(ToolError::new(format!(
+                "old_text must match exactly once, found {occurrences} matches"
+            )));
+        }
+        let updated = text.replacen(&arguments.old_text, &arguments.new_text, 1);
+        write_atomic(&path, updated.as_bytes())?;
+        let after_sha256 = fingerprint(updated.as_bytes());
+        let output = PatchOutput {
+            path: arguments.path,
+            before_sha256,
+            after_sha256,
+            bytes_written: updated.len(),
+        };
+        json_output(&output)
+    }
+
+    fn resolve_existing_file(&self, path: &str) -> Result<PathBuf, ToolError> {
+        let resolved = self.resolve_existing(path)?;
+        if !resolved.is_file() {
+            return Err(ToolError::new(format!("path is not a file: {path}")));
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_existing_directory(&self, path: &str) -> Result<PathBuf, ToolError> {
+        let resolved = self.resolve_existing(path)?;
+        if !resolved.is_dir() {
+            return Err(ToolError::new(format!("path is not a directory: {path}")));
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_existing(&self, path: &str) -> Result<PathBuf, ToolError> {
+        let relative = Path::new(path);
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(ToolError::new(format!(
+                "path must be relative and remain inside the workspace: {path}"
+            )));
+        }
+        let resolved = fs::canonicalize(self.root.join(relative))
+            .map_err(|error| ToolError::new(format!("cannot resolve {path}: {error}")))?;
+        if !resolved.starts_with(&self.root) {
+            return Err(ToolError::new(format!(
+                "resolved path escapes the workspace: {path}"
+            )));
+        }
+        Ok(resolved)
+    }
+}
+
+impl ToolRuntime for WorkspaceTools {
+    fn execute(&self, call: &ToolCall) -> ToolFuture<'_> {
+        let result = self.execute_sync(call);
+        Box::pin(async move { result })
+    }
+}
+
+fn parse_arguments<T>(arguments: &Value, tool: &str) -> Result<T, ToolError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_value(arguments.clone())
+        .map_err(|error| ToolError::new(format!("invalid {tool} arguments: {error}")))
+}
+
+fn json_output<T: Serialize>(value: &T) -> Result<ToolOutput, ToolError> {
+    serde_json::to_string(value)
+        .map(ToolOutput::success)
+        .map_err(|error| ToolError::new(format!("cannot encode tool output: {error}")))
+}
+
+fn fingerprint(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(bytes);
+    digest.iter().fold(
+        String::with_capacity(digest.len() * 2),
+        |mut encoded, byte| {
+            write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+            encoded
+        },
+    )
+}
+
+fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
+    if value.len() <= max_bytes {
+        return false;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
+    true
+}
+
+fn display_relative(root: &Path, path: &Path) -> Result<String, ToolError> {
+    path.strip_prefix(root)
+        .map(|relative| relative.to_string_lossy().into_owned())
+        .map_err(|_| {
+            ToolError::new(format!(
+                "search result escaped workspace: {}",
+                path.display()
+            ))
+        })
+}
+
+fn file_error(action: &str, path: &Path, error: &std::io::Error) -> ToolError {
+    ToolError::new(format!("cannot {action} {}: {error}", path.display()))
+}
+
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), ToolError> {
+    let parent = path.parent().ok_or_else(|| {
+        ToolError::new(format!("file has no parent directory: {}", path.display()))
+    })?;
+    let permissions = fs::metadata(path)
+        .map_err(|error| file_error("inspect", path, &error))?
+        .permissions();
+    let mut last_error = None;
+    for _ in 0..16 {
+        let serial = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(".gyrfalcon-{}-{serial}.tmp", std::process::id()));
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+        {
+            Ok(mut file) => {
+                let result = (|| {
+                    file.set_permissions(permissions.clone())?;
+                    file.write_all(contents)?;
+                    file.sync_all()?;
+                    drop(file);
+                    fs::rename(&temp_path, path)
+                })();
+                if let Err(error) = result {
+                    let _ = fs::remove_file(&temp_path);
+                    return Err(file_error("replace", path, &error));
+                }
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(file_error("create temporary file for", path, &error)),
+        }
+    }
+    Err(file_error(
+        "create temporary file for",
+        path,
+        &last_error.expect("at least one temporary file collision"),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadArguments {
+    path: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReadOutput {
+    path: String,
+    start_line: usize,
+    end_line: usize,
+    total_lines: usize,
+    truncated: bool,
+    sha256: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchArguments {
+    query: String,
+    path: Option<String>,
+    max_results: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchOutput {
+    query: String,
+    files_scanned: usize,
+    total_matches: usize,
+    matches: Vec<SearchMatch>,
+    truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchMatch {
+    path: String,
+    line: usize,
+    column: usize,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PatchArguments {
+    path: String,
+    expected_sha256: String,
+    old_text: String,
+    new_text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PatchOutput {
+    path: String,
+    before_sha256: String,
+    after_sha256: String,
+    bytes_written: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+
+    use gyr_protocol::ToolCall;
+    use serde_json::json;
+
+    use super::*;
+
+    static WORKSPACE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestWorkspace {
+        path: PathBuf,
+    }
+
+    impl TestWorkspace {
+        fn new() -> Self {
+            let serial = WORKSPACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "gyrfalcon-tools-test-{}-{serial}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+
+        fn write(&self, path: &str, contents: &str) {
+            let path = self.path.join(path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
+        }
+
+        fn tools(&self) -> WorkspaceTools {
+            WorkspaceTools::new(&self.path, ToolLimits::default()).unwrap()
+        }
+    }
+
+    impl Drop for TestWorkspace {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.path).unwrap();
+        }
+    }
+
+    fn call(name: &str, arguments: Value) -> ToolCall {
+        ToolCall {
+            id: "call-1".into(),
+            name: name.into(),
+            arguments,
+        }
+    }
+
+    fn output_json(output: &ToolOutput) -> Value {
+        assert!(!output.is_error);
+        serde_json::from_str(&output.content).unwrap()
+    }
+
+    #[test]
+    fn read_is_numbered_bounded_and_fingerprinted() {
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "one\ntwo\nthree\n");
+        let tools = workspace.tools();
+
+        let output = tools
+            .execute_sync(&call(
+                "read",
+                json!({"path": "src/lib.rs", "start_line": 2, "end_line": 3}),
+            ))
+            .unwrap();
+        let output = output_json(&output);
+
+        assert_eq!(output["content"], "     2\ttwo\n     3\tthree\n");
+        assert_eq!(output["total_lines"], 3);
+        assert_eq!(output["truncated"], false);
+        assert_eq!(output["sha256"].as_str().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn parent_traversal_is_rejected() {
+        let workspace = TestWorkspace::new();
+        let tools = workspace.tools();
+
+        let error = tools
+            .execute_sync(&call("read", json!({"path": "../outside"})))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("remain inside the workspace"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escape_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TestWorkspace::new();
+        let outside =
+            std::env::temp_dir().join(format!("gyrfalcon-tools-outside-{}", std::process::id()));
+        fs::write(&outside, "secret").unwrap();
+        symlink(&outside, workspace.path.join("escape")).unwrap();
+        let tools = workspace.tools();
+
+        let error = tools
+            .execute_sync(&call("read", json!({"path": "escape"})))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("escapes the workspace"));
+        fs::remove_file(outside).unwrap();
+    }
+
+    #[test]
+    fn search_is_literal_bounded_and_gitignore_aware() {
+        let workspace = TestWorkspace::new();
+        workspace.write(".gitignore", "ignored.txt\n");
+        workspace.write("src/lib.rs", "needle here\nneedle again\n");
+        workspace.write("ignored.txt", "needle hidden\n");
+        let tools = workspace.tools();
+
+        let output = tools
+            .execute_sync(&call(
+                "search",
+                json!({"query": "needle", "max_results": 1}),
+            ))
+            .unwrap();
+        let output = output_json(&output);
+
+        assert_eq!(output["total_matches"], 2);
+        assert_eq!(output["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(output["matches"][0]["path"], "src/lib.rs");
+        assert_eq!(output["truncated"], true);
+    }
+
+    #[test]
+    fn exact_patch_requires_current_fingerprint_and_one_match() {
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "fn old() {}\n");
+        let tools = workspace.tools();
+        let read_output = tools
+            .execute_sync(&call("read", json!({"path": "src/lib.rs"})))
+            .unwrap();
+        let read = output_json(&read_output);
+        let fingerprint = read["sha256"].as_str().unwrap();
+
+        let patched = tools
+            .execute_sync(&call(
+                "apply_patch",
+                json!({
+                    "path": "src/lib.rs",
+                    "expected_sha256": fingerprint,
+                    "old_text": "old",
+                    "new_text": "new"
+                }),
+            ))
+            .unwrap();
+        let patched = output_json(&patched);
+
+        assert_eq!(
+            fs::read_to_string(workspace.path.join("src/lib.rs")).unwrap(),
+            "fn new() {}\n"
+        );
+        assert_ne!(patched["before_sha256"], patched["after_sha256"]);
+
+        let stale = tools
+            .execute_sync(&call(
+                "apply_patch",
+                json!({
+                    "path": "src/lib.rs",
+                    "expected_sha256": fingerprint,
+                    "old_text": "new",
+                    "new_text": "newer"
+                }),
+            ))
+            .unwrap_err();
+        assert!(stale.to_string().contains("stale file"));
+    }
+
+    #[test]
+    fn exact_patch_rejects_ambiguous_matches_without_writing() {
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "same\nsame\n");
+        let tools = workspace.tools();
+        let original = fs::read(workspace.path.join("src/lib.rs")).unwrap();
+        let expected_sha256 = fingerprint(&original);
+
+        let error = tools
+            .execute_sync(&call(
+                "apply_patch",
+                json!({
+                    "path": "src/lib.rs",
+                    "expected_sha256": expected_sha256,
+                    "old_text": "same",
+                    "new_text": "different"
+                }),
+            ))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("found 2 matches"));
+        assert_eq!(
+            fs::read(workspace.path.join("src/lib.rs")).unwrap(),
+            original
+        );
+    }
+}

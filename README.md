@@ -7,11 +7,13 @@ API wearing a false moustache.
 
 ## Status
 
-The provider-neutral loop, OpenAI Responses transport and Qwen Chat Completions
-transport are implemented with recorded stream tests. The Anthropic adapter,
-coding tools, approval policy and interactive terminal remain to be built.
-There is not yet a usable coding agent and the repository does not claim
-otherwise.
+The provider-neutral loop and the OpenAI Responses, Anthropic Messages and Qwen
+Chat Completions transports are implemented with recorded parser tests. Qwen
+and Anthropic also have local HTTP/SSE wire tests. Bounded read, ignore-aware
+literal search and stale-checked exact patch tools are implemented but are not
+wired to a live model before the approval policy exists. Process tools, that
+approval policy and the interactive terminal remain to be built. There is not
+yet a usable coding agent and the repository does not claim otherwise.
 
 The initial model targets are:
 
@@ -31,6 +33,8 @@ runtimes may follow once they pass the same conformance suite.
 - [RFC-0001: Architecture](docs/rfcs/RFC-0001-architecture.md)
 - [RFC-0002: Predecessors and public agents](docs/rfcs/RFC-0002-predecessors.md)
 - [RFC-0003: Provider protocol](docs/rfcs/RFC-0003-provider-protocol.md)
+- [RFC-0004: Local subscription model probes](docs/rfcs/RFC-0004-local-model-probes.md)
+- [RFC-0005: Workspace filesystem tools](docs/rfcs/RFC-0005-filesystem-tools.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed
 in source, documented by a provider, or inferred. Quantitative claims carry a

@@ -59,16 +59,17 @@ deltas are presentation data, never executable authority.
 | Model | Protocol | Reasoning | Native context | Required parser |
 |---|---|---:|---:|---|
 | `gpt-5.6-terra` | OpenAI Responses | configurable | 1,050,000 | provider-native |
-| Claude Opus | Anthropic Messages | provider-native | discovered/configured | provider-native |
+| `claude-opus-5` | Anthropic Messages | low through max | 1,000,000 | provider-native |
 | `Qwen3-Coder-480B-A35B-Instruct` | Qwen Chat Completions | no | 262,144 | `qwen3_coder` |
 | `Qwen3-Coder-Next` | Qwen Chat Completions | no | 262,144 | `qwen3_coder` |
 | `Qwen3-Coder-30B-A3B-Instruct` | Qwen Chat Completions | no | 262,144 | `qwen3_coder` |
 | `Qwen3.6-27B` | Qwen Chat Completions | yes | 262,144 | `qwen3` + `qwen3_coder` |
 | `Qwen3.6-35B-A3B` | Qwen Chat Completions | yes | 262,144 | `qwen3` + `qwen3_coder` |
 
-The Anthropic model identifier remains user-configurable until its adapter is
-implemented against the then-current Opus alias and model catalogue. "Opus" is
-a product target; silently pinning a stale snapshot would be false precision.
+The built-in Anthropic profile follows the current `claude-opus-5` alias. A
+session still carries the provider model identifier explicitly so deployments
+can pin a snapshot or test another compatible model without changing the
+transport.
 
 ## 4. OpenAI Responses
 
@@ -109,11 +110,41 @@ Sources:
 
 ## 5. Anthropic Messages
 
-The adapter retains assistant content blocks exactly and sends client tool
-results as the immediately following user content blocks. Results are ordered
-before any user text. A stop reason of `tool_use` requires another client turn;
-`end_turn`, `max_tokens`, refusal and provider errors are distinct terminal
-outcomes.
+**Provider-documented on 2026-08-23:** Claude Opus 5 has a 1,000,000-token
+context window and a 128,000-token maximum output. Current Claude models use
+adaptive thinking and `output_config.effort`. Opus 5 accepts `low`, `medium`,
+`high`, `xhigh` and `max`; thinking cannot be disabled at `xhigh` or `max`.
+
+The adapter uses Messages API version `2023-06-01`, retains native assistant
+content blocks and sends client tool results as the immediately following user
+message. That message contains only `tool_result` blocks. Opaque thinking
+signatures are accumulated from `signature_delta` events. Ordinary `thinking`
+and safety-redacted `redacted_thinking` blocks are replayed unchanged on the
+next turn. Direct tool caller metadata is retained as well. Losing or altering
+these values is a protocol error, not an invitation to make up a replacement.
+
+Streamed tool input arrives as fragments in `input_json_delta.partial_json`.
+The adapter emits presentation deltas as they arrive, then parses the complete
+value at `content_block_stop` before authorising a tool call. A malformed or
+unfinished value is rejected. History is committed only after `message_stop`.
+
+`tool_use` requests another client turn. `end_turn` and `stop_sequence` map to
+normal completion; `max_tokens` and `model_context_window_exceeded` map to the
+bounded-output outcome; `refusal` remains distinct. `pause_turn` is rejected in
+the MVP because it requires continuation of provider server tools, which the
+client-only tool surface does not enable.
+
+Anthropic reports ordinary, cache-creation and cache-read input tokens
+separately. Gyrfalcon's normalised input total is their sum, while cache-read
+tokens are also retained in `cached_input_tokens`. Reasoning token usage is not
+reported separately by this protocol and remains zero rather than being
+estimated.
+
+The transport has parser fixtures and an in-process TCP conformance test which
+checks the request path, `anthropic-version` and `x-api-key` headers, request
+body, SSE lifecycle and final stop reason. This is transport verification, not
+a claim that the repository has exercised the adapter against Anthropic's live
+API.
 
 Reasoning and text deltas remain different model events. Invalid partial tool
 JSON is never repaired silently. If fine-grained tool streaming is later
@@ -125,6 +156,11 @@ Sources:
 - <https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works>
 - <https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls>
 - <https://platform.claude.com/docs/en/build-with-claude/streaming>
+- <https://platform.claude.com/docs/en/about-claude/models/overview>
+- <https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5>
+- <https://platform.claude.com/docs/en/build-with-claude/effort>
+- <https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons>
+- <https://platform.claude.com/docs/en/about-claude/models/extended-thinking-models>
 
 ## 6. Qwen Chat Completions
 

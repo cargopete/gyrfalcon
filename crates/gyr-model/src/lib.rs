@@ -13,6 +13,7 @@ use gyr_protocol::SamplingDefaults;
 use gyr_protocol::TurnInput;
 use thiserror::Error;
 
+pub mod anthropic;
 pub mod openai;
 pub mod qwen;
 mod sse;
@@ -93,9 +94,15 @@ fn claude_opus() -> ModelProfile {
         provider_model: "claude-opus-5".into(),
         display_name: "Claude Opus".into(),
         provider: ProviderKind::Anthropic,
-        context_window_tokens: None,
-        max_output_tokens: None,
-        reasoning: ReasoningSupport::ProviderManaged,
+        context_window_tokens: Some(1_000_000),
+        max_output_tokens: Some(128_000),
+        reasoning: ReasoningSupport::Effort(vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+        ]),
         parallel_tool_calls: true,
         image_input: true,
         tool_call_parser: None,

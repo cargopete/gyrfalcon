@@ -80,6 +80,7 @@ next request.
 - `gyr-protocol`: stable internal values crossing crate and frontend boundaries.
 - `gyr-model`: provider session traits and the explicit model catalogue.
 - `gyr-core`: agent state machine, tool dispatch and session event emission.
+- `gyr-tools`: workspace-rooted filesystem tools and their hard output limits.
 - `gyr-cli`: the `gyr` executable. A line UI comes before a full TUI.
 - Provider crates will be introduced one at a time once their contract tests
   exist. Empty crates are not architecture.
