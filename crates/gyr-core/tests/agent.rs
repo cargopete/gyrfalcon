@@ -296,7 +296,14 @@ async fn cancellation_between_tool_calls_stops_before_the_next_turn() {
     let result = agent.run_cancellable("read a file", &cancel).await.unwrap();
 
     assert_eq!(result.stop_reason, StopReason::Cancelled);
-    assert!(result.events.is_empty());
+    // The question was asked and then cancelled, so the log holds the question
+    // and nothing else. Recording nothing at all would be tidier and less true.
+    assert_eq!(
+        result.events,
+        vec![AgentEvent::Submitted {
+            text: "read a file".into()
+        }]
+    );
     assert!(agent.session().inputs.is_empty());
 }
 

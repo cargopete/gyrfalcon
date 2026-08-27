@@ -264,6 +264,14 @@ impl ApprovalDecision {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// What the person asked, once per submission, before the first request.
+    ///
+    /// An agent event rather than a session record because it belongs to the
+    /// turn sequence: a reader walking events in order should meet the question
+    /// in its place rather than correlate a second stream by timestamp.
+    Submitted {
+        text: String,
+    },
     Model {
         model_turn: u32,
         event: ModelEvent,

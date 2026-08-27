@@ -133,6 +133,10 @@ fn absorb(metrics: &mut Metrics, names: &mut HashMap<String, String>, event: &Ag
             metrics.bytes_reclaimed += bytes_reclaimed;
         }
         AgentEvent::ContextWarning { .. } => metrics.context_warned = true,
-        AgentEvent::Model { .. } | AgentEvent::ToolDecided { .. } => {}
+        // Counted by nothing: a submission is the unit a metric is per, not a
+        // metric itself.
+        AgentEvent::Submitted { .. }
+        | AgentEvent::Model { .. }
+        | AgentEvent::ToolDecided { .. } => {}
     }
 }

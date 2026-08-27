@@ -156,6 +156,11 @@ impl Renderer {
 impl EventSink for Renderer {
     fn emit(&mut self, event: &AgentEvent) -> Result<(), SinkError> {
         match event {
+            // The person's own words, in the person's colour.
+            AgentEvent::Submitted { text } => {
+                self.break_stream()?;
+                write_out(&style::paint(RUST, &format!("\n› {text}\n")))
+            }
             AgentEvent::Model { event, .. } => self.model_event(event),
             AgentEvent::ToolDecided {
                 tool,

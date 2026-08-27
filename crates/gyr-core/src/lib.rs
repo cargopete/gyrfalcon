@@ -273,10 +273,16 @@ where
         user_message: String,
         cancel: &CancellationToken,
     ) -> Result<RunResult, AgentError> {
+        let mut events = Vec::new();
+        self.emit(
+            AgentEvent::Submitted {
+                text: user_message.clone(),
+            },
+            &mut events,
+        )?;
         let mut input = TurnInput::User {
             content: user_message,
         };
-        let mut events = Vec::new();
         let mut text = String::new();
         let mut seen_call_ids = HashSet::new();
         // A window has one documented size or none. Without one, none of this

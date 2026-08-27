@@ -70,9 +70,13 @@ CI and evals.
   calls, the text, and every call ID — with a marker saying what went and how
   much. Elision, not summarisation: no extra model request, deterministic, and
   it does not quietly rewrite what the model believes happened.
-- **A session log.** Append-only JSONL holding the proposed action, the
-  decision, the execution and the result, plus the model, workspace, approval
-  mode and containment in force.
+- **A session log, and a way to read it back.** Append-only JSONL holding what
+  you asked, the proposed action, the decision, the execution and the result,
+  plus the model, workspace, approval mode and containment in force. `gyr replay`
+  renders a past session through the same renderer the live one uses, with
+  `--last N` for just the recent exchanges. Building that found the log had never
+  recorded the questions, only the answers, so a claim this repository had
+  carried since RFC-0001 was quietly false until RFC-0016.
 - **A line-based interface.** Not an alternate-screen one, deliberately: the
   transcript belongs in the terminal's scrollback, where a person goes to find
   what the agent did an hour ago and where selection and copying still work.
@@ -123,8 +127,8 @@ simply refuses everything.
 Shells and pipelines. Rollback: the gate refuses
 rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Summarising compaction, and any context relief at all for OpenAI, whose
-server-side continuation keeps no local history to reduce. Log replay, which section 2 of RFC-0014
-argues cannot be done honestly from a normalised log. Context relief for
+server-side continuation keeps no local history to reduce. Resuming *from* a log, as opposed to replaying one, which
+section 2 of RFC-0014 argues cannot be done honestly. Context relief for
 OpenAI, whose server-side continuation keeps nothing local to reduce, and which
 wants a live credential to verify rather than merely to write.
 
@@ -288,6 +292,7 @@ The command is `gyr`; Gyrfalcon is the project.
 - [RFC-0013: The context budget](docs/rfcs/RFC-0013-context-budget.md)
 - [RFC-0014: Resuming a session](docs/rfcs/RFC-0014-session-resumption.md)
 - [RFC-0015: Configuration files](docs/rfcs/RFC-0015-configuration.md)
+- [RFC-0016: Replaying a session](docs/rfcs/RFC-0016-replay.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed in
 source, documented by a provider, or inferred. Quantitative claims carry a date

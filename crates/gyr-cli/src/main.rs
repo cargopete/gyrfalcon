@@ -4,6 +4,7 @@ mod approve;
 mod config;
 mod evals;
 mod render;
+mod replay;
 mod session;
 mod settings;
 mod style;
@@ -91,6 +92,8 @@ enum Command {
     Eval(crate::evals::EvalArgs),
     /// Show every setting, its value, and where that value came from.
     Config(PromptArgs),
+    /// Print a past session from its log.
+    Replay(crate::replay::ReplayArgs),
 }
 
 // These are switches rather than a state machine because each one means one
@@ -186,6 +189,7 @@ fn dispatch() -> Result<ExitCode> {
             print_config(&args)?;
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Replay(args)) => replay::run(&args),
         None => on_runtime(session(cli.common)),
     }
 }

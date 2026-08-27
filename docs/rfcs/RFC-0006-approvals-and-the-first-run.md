@@ -166,6 +166,13 @@ written to this log, per RFC-0001 section 9. Replay from a session log is
 therefore not yet implemented; the log's first jobs are debugging, approval
 audit and the eval corpus.
 
+**Amended 2026-08-27.** RFC-0012 made good on the corpus. RFC-0016 made good on
+presentation, and in doing so found that this log had never recorded what the
+person asked, so the claim in RFC-0001 section 9 that presentation derives from
+it could not have been true. `AgentEvent::Submitted` fixed that. Continuation is
+still not replayed from here and cannot be, for the reason RFC-0014 section 2
+gives.
+
 ## 6. Cancellation
 
 `Agent::run` takes a `CancellationToken`. This adds `tokio-util` to the
