@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 use gyr_core::ToolError;
 use gyr_core::ToolFuture;
 use gyr_core::ToolRuntime;
+use gyr_protocol::ToolAction;
 use gyr_protocol::ToolCall;
 use gyr_protocol::ToolDefinition;
 use gyr_protocol::ToolOutput;
@@ -127,6 +128,33 @@ impl WorkspaceTools {
                 }),
             },
         ]
+    }
+
+    /// Classifies a call using the same path resolution execution will use.
+    ///
+    /// The subject reported for `apply_patch` is therefore the file that would
+    /// actually be written, not the string the model supplied. An approval
+    /// granted for one file cannot be spent on another by way of a symbolic
+    /// link or an unusual spelling of the same path.
+    fn classify_sync(&self, call: &ToolCall) -> Result<ToolAction, ToolError> {
+        match call.name.as_str() {
+            "read" => {
+                let _: ReadArguments = parse_arguments(&call.arguments, "read")?;
+                Ok(ToolAction::read_only())
+            }
+            "search" => {
+                let _: SearchArguments = parse_arguments(&call.arguments, "search")?;
+                Ok(ToolAction::read_only())
+            }
+            "apply_patch" => {
+                let arguments: PatchArguments = parse_arguments(&call.arguments, "apply_patch")?;
+                let resolved = self.resolve_existing_file(&arguments.path)?;
+                Ok(ToolAction::mutating(display_relative(
+                    &self.root, &resolved,
+                )?))
+            }
+            name => Err(ToolError::new(format!("unknown tool {name:?}"))),
+        }
     }
 
     fn execute_sync(&self, call: &ToolCall) -> Result<ToolOutput, ToolError> {
@@ -342,6 +370,10 @@ impl WorkspaceTools {
 }
 
 impl ToolRuntime for WorkspaceTools {
+    fn classify(&self, call: &ToolCall) -> Result<ToolAction, ToolError> {
+        self.classify_sync(call)
+    }
+
     fn execute(&self, call: &ToolCall) -> ToolFuture<'_> {
         let result = self.execute_sync(call);
         Box::pin(async move { result })
@@ -563,6 +595,110 @@ mod tests {
     fn output_json(output: &ToolOutput) -> Value {
         assert!(!output.is_error);
         serde_json::from_str(&output.content).unwrap()
+    }
+
+    #[test]
+    fn classification_names_read_and_search_as_read_only() {
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "one\n");
+        let tools = workspace.tools();
+
+        let read = tools
+            .classify(&call("read", json!({"path": "src/lib.rs"})))
+            .unwrap();
+        let search = tools
+            .classify(&call("search", json!({"query": "one"})))
+            .unwrap();
+
+        assert_eq!(read, ToolAction::read_only());
+        assert_eq!(search, ToolAction::read_only());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_classified_subject_is_the_path_that_would_be_written() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "one\n");
+        symlink(
+            workspace.path.join("src/lib.rs"),
+            workspace.path.join("alias.rs"),
+        )
+        .unwrap();
+        let tools = workspace.tools();
+        let patch = |path: &str| {
+            call(
+                "apply_patch",
+                json!({
+                    "path": path,
+                    "expected_sha256": "0".repeat(64),
+                    "old_text": "one",
+                    "new_text": "two",
+                }),
+            )
+        };
+
+        let direct = tools.classify(&patch("./src/lib.rs")).unwrap();
+        let through_link = tools.classify(&patch("alias.rs")).unwrap();
+
+        // Both spellings reach one file, so both are approved as that file. An
+        // approval granted for src/lib.rs cannot be dodged by asking again
+        // under a different name for the same bytes.
+        assert_eq!(direct, ToolAction::mutating("src/lib.rs"));
+        assert_eq!(through_link, ToolAction::mutating("src/lib.rs"));
+    }
+
+    #[test]
+    fn classification_rejects_parent_traversal_before_any_decision() {
+        let workspace = TestWorkspace::new();
+        let tools = workspace.tools();
+        let arguments = json!({
+            "path": "../outside",
+            "expected_sha256": "0".repeat(64),
+            "old_text": "one",
+            "new_text": "two",
+        });
+
+        let error = tools.classify(&call("apply_patch", arguments)).unwrap_err();
+
+        assert!(error.to_string().contains("remain inside the workspace"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classification_rejects_a_symlink_escape_before_any_decision() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TestWorkspace::new();
+        let outside =
+            std::env::temp_dir().join(format!("gyrfalcon-classify-outside-{}", std::process::id()));
+        fs::write(&outside, "secret").unwrap();
+        symlink(&outside, workspace.path.join("escape")).unwrap();
+        let tools = workspace.tools();
+        let arguments = json!({
+            "path": "escape",
+            "expected_sha256": "0".repeat(64),
+            "old_text": "secret",
+            "new_text": "published",
+        });
+
+        let error = tools.classify(&call("apply_patch", arguments)).unwrap_err();
+
+        fs::remove_file(&outside).unwrap();
+        assert!(error.to_string().contains("escapes the workspace"));
+    }
+
+    #[test]
+    fn an_unknown_tool_cannot_be_classified() {
+        let workspace = TestWorkspace::new();
+        let tools = workspace.tools();
+
+        let error = tools
+            .classify(&call("exec", json!({"command": "rm -rf /"})))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("unknown tool"));
     }
 
     #[test]

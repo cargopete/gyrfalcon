@@ -147,10 +147,113 @@ pub enum ModelEvent {
     Finished { reason: StopReason },
 }
 
+/// What a tool call would do, as classified by the runtime that owns the tool.
+///
+/// Two classes are enough for the filesystem surface. Process execution will
+/// need at least a workspace-local and an external class, and will introduce
+/// them with the tool that requires them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolClass {
+    ReadOnly,
+    Mutating,
+}
+
+/// A classified tool call, with the narrow subject a session rule may be keyed on.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ToolAction {
+    pub class: ToolClass,
+    /// A resolved, workspace-relative target where the tool has one.
+    pub subject: Option<String>,
+}
+
+impl ToolAction {
+    #[must_use]
+    pub fn read_only() -> Self {
+        Self {
+            class: ToolClass::ReadOnly,
+            subject: None,
+        }
+    }
+
+    #[must_use]
+    pub fn mutating(subject: impl Into<String>) -> Self {
+        Self {
+            class: ToolClass::Mutating,
+            subject: Some(subject.into()),
+        }
+    }
+
+    /// The key a session-scoped approval rule is stored under.
+    ///
+    /// Deliberately built from the tool name and resolved subject rather than
+    /// from any rendered description of the action.
+    #[must_use]
+    pub fn rule_key(&self, tool: &str) -> String {
+        match &self.subject {
+            Some(subject) => format!("{tool}\u{1f}{subject}"),
+            None => tool.to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionSource {
+    /// Allowed by classification, without asking anyone.
+    Policy,
+    /// Allowed by a narrow rule granted earlier in this session.
+    SessionRule,
+    /// Allowed once, by a person, just now.
+    User,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ApprovalDecision {
+    Allowed { source: DecisionSource },
+    Denied { reason: String },
+}
+
+impl ApprovalDecision {
+    #[must_use]
+    pub fn allowed(source: DecisionSource) -> Self {
+        Self::Allowed { source }
+    }
+
+    #[must_use]
+    pub fn denied(reason: impl Into<String>) -> Self {
+        Self::Denied {
+            reason: reason.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allowed { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
-    Model { model_turn: u32, event: ModelEvent },
-    ToolStarted { model_turn: u32, call: ToolCall },
-    ToolFinished { model_turn: u32, result: ToolResult },
+    Model {
+        model_turn: u32,
+        event: ModelEvent,
+    },
+    ToolDecided {
+        model_turn: u32,
+        call_id: String,
+        tool: String,
+        action: ToolAction,
+        decision: ApprovalDecision,
+    },
+    ToolStarted {
+        model_turn: u32,
+        call: ToolCall,
+    },
+    ToolFinished {
+        model_turn: u32,
+        result: ToolResult,
+    },
 }

@@ -7,13 +7,22 @@ API wearing a false moustache.
 
 ## Status
 
-The provider-neutral loop and the OpenAI Responses, Anthropic Messages and Qwen
-Chat Completions transports are implemented with recorded parser tests. Qwen
-and Anthropic also have local HTTP/SSE wire tests. Bounded read, ignore-aware
-literal search and stale-checked exact patch tools are implemented but are not
-wired to a live model before the approval policy exists. Process tools, that
-approval policy and the interactive terminal remain to be built. There is not
-yet a usable coding agent and the repository does not claim otherwise.
+`gyr run` is a working one-shot agent. It selects a model, builds a provider
+session, streams a turn, classifies each tool call, enforces an approval policy
+in code, records every proposed action and decision to an append-only JSONL log,
+and stops on Ctrl-C without inventing a terminal event the provider never sent.
+
+The OpenAI Responses, Anthropic Messages and Qwen Chat Completions transports
+are implemented with recorded parser tests; Qwen and Anthropic also have local
+HTTP/SSE wire tests. Read, ignore-aware literal search and stale-checked exact
+patch tools are wired to the loop behind the approval layer.
+
+Process execution, the structured `cargo` tool and the Rust diagnostic gate do
+not exist yet. Neither does the operating-system sandbox: what is enforced today
+is a filesystem fence plus approval, which is not the same claim. There is no
+interactive terminal interface, no conversation state across invocations, and no
+log replay. This is a usable single-shot agent and not yet a usable coding
+session, and the repository does not claim otherwise.
 
 The initial model targets are:
 
@@ -35,6 +44,7 @@ runtimes may follow once they pass the same conformance suite.
 - [RFC-0003: Provider protocol](docs/rfcs/RFC-0003-provider-protocol.md)
 - [RFC-0004: Local subscription model probes](docs/rfcs/RFC-0004-local-model-probes.md)
 - [RFC-0005: Workspace filesystem tools](docs/rfcs/RFC-0005-filesystem-tools.md)
+- [RFC-0006: Approvals, session log and the first interactive run](docs/rfcs/RFC-0006-approvals-and-the-first-run.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed
 in source, documented by a provider, or inferred. Quantitative claims carry a
@@ -46,7 +56,21 @@ a sound dependency.
 ```console
 cargo test --workspace
 cargo run -p gyr-cli -- models
+cargo run -p gyr-cli -- prompt --model claude-opus
 ```
+
+Running against a model needs that provider's credential in the environment:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `QWEN_API_BASE` for a self-hosted
+vLLM or SGLang endpoint. A missing one fails before any request is sent.
+
+```console
+export ANTHROPIC_API_KEY=...
+gyr run --model claude-opus "what does gyr-core::Agent::run guarantee?"
+```
+
+Mutations ask before they happen. `--read-only` refuses them instead, and
+`--dangerously-allow-all` does not ask, which is a decision worth making
+deliberately. Every run writes `.gyr/sessions/<id>.jsonl`.
 
 The command is `gyr`; Gyrfalcon is the project.
 

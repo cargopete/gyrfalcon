@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | implemented M0 subset |
+| Status | implemented M0 subset; wired in M1 |
 | Date | 2026-08-23 |
 | Depends on | RFC-0001 |
 
@@ -20,9 +20,9 @@ This resolves RFC-0001's initial format question for the first eval corpus. A
 unified-diff variant may be evaluated later against the same stale-content and
 path rules.
 
-The crate implements `gyr-core::ToolRuntime` but is not yet wired into a live
-CLI agent. Filesystem writes require an approval layer before that connection
-is permitted.
+The crate implements `gyr-core::ToolRuntime`. It was not wired into a live CLI
+agent until the approval layer existed; RFC-0006 supplied that layer, and
+`WorkspaceTools` now also classifies each call so a policy can decide it.
 
 ## 2. Root confinement
 
@@ -110,11 +110,12 @@ Source:
 
 ## 6. Verification and remaining work
 
-Six deterministic temporary-workspace tests cover bounded reading, hashing,
-ignore-aware search, ambiguous edits, stale edits, parent traversal and symlink
-escape. The workspace currently passes 27 tests and Clippy with warnings denied.
+Eleven deterministic temporary-workspace tests cover bounded reading, hashing,
+ignore-aware search, ambiguous edits, stale edits, parent traversal, symlink
+escape, and the classification rules RFC-0006 added. The workspace passes 47
+tests and Clippy with warnings denied, measured on 2026-08-27.
 
-This slice does not yet include approvals, OS sandboxing, process execution,
-structured Cargo diagnostics, cancellation of a long search, binary-file reads,
-new-file creation or a rendered diff. Those are missing features rather than
-properties delegated to the system prompt.
+Approvals arrived with RFC-0006. This slice still does not include OS
+sandboxing, process execution, structured Cargo diagnostics, cancellation of a
+long search, binary-file reads, new-file creation or a rendered diff. Those are
+missing features rather than properties delegated to the system prompt.

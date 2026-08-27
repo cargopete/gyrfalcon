@@ -34,6 +34,17 @@ pub trait ModelSession: Send {
     fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream>;
 }
 
+/// Lets a frontend hold one boxed session whatever provider it selected.
+impl ModelSession for Box<dyn ModelSession> {
+    fn profile(&self) -> &ModelProfile {
+        (**self).profile()
+    }
+
+    fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream> {
+        (**self).next(input)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ModelError {
     #[error("model transport failed: {0}")]

@@ -10,7 +10,10 @@ rust-version.workspace = true
 futures-util.workspace = true
 gyr-model.workspace = true
 gyr-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+tokio-util.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

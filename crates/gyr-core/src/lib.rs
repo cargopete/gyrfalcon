@@ -1,4 +1,13 @@
 //! Gyrfalcon's provider-neutral act-observe loop.
+//!
+//! The runtime classifies a tool call, a policy decides it, and this core
+//! records the decision before dispatching. Approval is enforced here rather
+//! than in a decorator so that the session log can honestly claim to hold the
+//! proposed action, the decision, the execution and the result.
+
+pub mod approval;
+pub mod prompt;
+pub mod session;
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -9,17 +18,40 @@ use futures_util::StreamExt;
 use gyr_model::ModelError;
 use gyr_model::ModelSession;
 use gyr_protocol::AgentEvent;
+use gyr_protocol::ApprovalDecision;
 use gyr_protocol::ModelEvent;
 use gyr_protocol::StopReason;
+use gyr_protocol::ToolAction;
 use gyr_protocol::ToolCall;
 use gyr_protocol::ToolOutput;
 use gyr_protocol::ToolResult;
 use gyr_protocol::TurnInput;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
+
+use crate::approval::ApprovalPolicy;
+use crate::session::EventSink;
+use crate::session::NullSink;
+use crate::session::RunOutcome;
+use crate::session::SinkError;
 
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>>;
 
+/// A set of tools, which both classifies and executes calls against itself.
+///
+/// Classification lives here rather than in the core because the runtime owns
+/// the tool schemas. An implementation must resolve a call's target the same
+/// way in both methods, or an approval granted for one target could be spent on
+/// another.
 pub trait ToolRuntime: Send + Sync {
+    /// Describes what a call would do, without doing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError`] for an unknown tool or arguments that do not
+    /// parse. Such a call is never decided and never executed.
+    fn classify(&self, call: &ToolCall) -> Result<ToolAction, ToolError>;
+
     fn execute(&self, call: &ToolCall) -> ToolFuture<'_>;
 }
 
@@ -56,11 +88,14 @@ pub struct RunResult {
     pub events: Vec<AgentEvent>,
     pub text: String,
     pub stop_reason: StopReason,
+    pub model_turns: u32,
 }
 
 pub struct Agent<S, T> {
     session: S,
     tools: T,
+    policy: Box<dyn ApprovalPolicy>,
+    sink: Box<dyn EventSink>,
     config: AgentConfig,
 }
 
@@ -69,38 +104,114 @@ where
     S: ModelSession,
     T: ToolRuntime,
 {
+    /// Builds an agent that refuses every mutation and records nothing.
+    ///
+    /// The default policy is deliberately [`approval::ReadOnly`]: an agent
+    /// assembled without an explicit choice cannot write to the workspace.
     pub fn new(session: S, tools: T, config: AgentConfig) -> Self {
         Self {
             session,
             tools,
+            policy: Box::new(approval::ReadOnly),
+            sink: Box::new(NullSink),
             config,
         }
+    }
+
+    #[must_use]
+    pub fn with_policy(mut self, policy: impl ApprovalPolicy + 'static) -> Self {
+        self.policy = Box::new(policy);
+        self
+    }
+
+    #[must_use]
+    pub fn with_sink(mut self, sink: impl EventSink + 'static) -> Self {
+        self.sink = Box::new(sink);
+        self
     }
 
     pub fn session(&self) -> &S {
         &self.session
     }
 
-    /// Runs one user request until the model finishes or the safety limit is reached.
+    pub fn tools(&self) -> &T {
+        &self.tools
+    }
+
+    /// Runs one user request to completion, without cancellation.
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError`] when the provider stream violates the event protocol,
-    /// a model request fails, or the configured model-turn limit is exhausted.
+    /// See [`Agent::run_cancellable`].
     pub async fn run(&mut self, user_message: impl Into<String>) -> Result<RunResult, AgentError> {
+        self.run_cancellable(user_message, &CancellationToken::new())
+            .await
+    }
+
+    /// Runs one user request until the model finishes, the caller cancels, or
+    /// the safety limit is reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the provider stream violates the event
+    /// protocol, a model request fails, the session sink fails, or the
+    /// configured model-turn limit is exhausted.
+    pub async fn run_cancellable(
+        &mut self,
+        user_message: impl Into<String>,
+        cancel: &CancellationToken,
+    ) -> Result<RunResult, AgentError> {
+        let outcome = self.drive(user_message.into(), cancel).await;
+        let record = match &outcome {
+            Ok(result) => RunOutcome {
+                stop_reason: Some(result.stop_reason),
+                model_turns: result.model_turns,
+                error: None,
+            },
+            Err(error) => RunOutcome {
+                stop_reason: None,
+                model_turns: 0,
+                error: Some(error.to_string()),
+            },
+        };
+        match (outcome, self.sink.finish(&record)) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Ok(_), Err(error)) => Err(AgentError::Sink(error)),
+            // A sink failure while reporting an earlier failure does not get to
+            // replace the more informative error.
+            (Err(error), _) => Err(error),
+        }
+    }
+
+    async fn drive(
+        &mut self,
+        user_message: String,
+        cancel: &CancellationToken,
+    ) -> Result<RunResult, AgentError> {
         let mut input = TurnInput::User {
-            content: user_message.into(),
+            content: user_message,
         };
         let mut events = Vec::new();
         let mut text = String::new();
         let mut seen_call_ids = HashSet::new();
 
         for model_turn in 1..=self.config.max_model_turns.get() {
-            let mut stream = self.session.next(input).await?;
+            if cancel.is_cancelled() {
+                return Ok(cancelled(events, text, model_turn.saturating_sub(1)));
+            }
+
+            let mut stream = match cancel.run_until_cancelled(self.session.next(input)).await {
+                Some(stream) => stream?,
+                None => return Ok(cancelled(events, text, model_turn.saturating_sub(1))),
+            };
             let mut calls = Vec::new();
             let mut stop_reason = None;
 
-            while let Some(event) = stream.next().await {
+            loop {
+                let Some(next) = cancel.run_until_cancelled(stream.next()).await else {
+                    return Ok(cancelled(events, text, model_turn));
+                };
+                let Some(event) = next else { break };
                 let event = event?;
                 if stop_reason.is_some() {
                     return Err(AgentError::EventAfterFinished);
@@ -122,7 +233,7 @@ where
                     | ModelEvent::Usage { .. } => {}
                 }
 
-                events.push(AgentEvent::Model { model_turn, event });
+                self.emit(AgentEvent::Model { model_turn, event }, &mut events)?;
             }
 
             let stop_reason = stop_reason.ok_or(AgentError::StreamEndedWithoutFinish)?;
@@ -134,23 +245,10 @@ where
 
                     let mut results = Vec::with_capacity(calls.len());
                     for call in calls {
-                        events.push(AgentEvent::ToolStarted {
-                            model_turn,
-                            call: call.clone(),
-                        });
-                        let output = self
-                            .tools
-                            .execute(&call)
-                            .await
-                            .unwrap_or_else(|error| ToolOutput::error(error.to_string()));
-                        let result = ToolResult {
-                            call_id: call.id,
-                            output,
-                        };
-                        events.push(AgentEvent::ToolFinished {
-                            model_turn,
-                            result: result.clone(),
-                        });
+                        if cancel.is_cancelled() {
+                            return Ok(cancelled(events, text, model_turn));
+                        }
+                        let result = self.settle(model_turn, call, &mut events).await?;
                         results.push(result);
                     }
                     input = TurnInput::ToolResults { results };
@@ -163,6 +261,7 @@ where
                         events,
                         text,
                         stop_reason,
+                        model_turns: model_turn,
                     });
                 }
                 StopReason::MaxTokens | StopReason::Refusal | StopReason::Cancelled => {
@@ -170,6 +269,7 @@ where
                         events,
                         text,
                         stop_reason,
+                        model_turns: model_turn,
                     });
                 }
             }
@@ -179,12 +279,109 @@ where
             self.config.max_model_turns.get(),
         ))
     }
+
+    /// Classifies, decides and, where permitted, executes one tool call.
+    ///
+    /// Every call that reaches this method produces exactly one [`ToolResult`],
+    /// so the provider always receives a result for every call ID it issued. A
+    /// refusal is an ordinary observation carrying that ID, not a control-flow
+    /// escape.
+    async fn settle(
+        &mut self,
+        model_turn: u32,
+        call: ToolCall,
+        events: &mut Vec<AgentEvent>,
+    ) -> Result<ToolResult, AgentError> {
+        let action = match self.tools.classify(&call) {
+            Ok(action) => action,
+            Err(error) => {
+                // Not classified, so not decided and not executed. The log shows
+                // a call that failed before any policy could apply to it.
+                return self.finish_call(
+                    model_turn,
+                    call.id,
+                    ToolOutput::error(error.to_string()),
+                    events,
+                );
+            }
+        };
+
+        let decision = self.policy.decide(&call, &action).await;
+        self.emit(
+            AgentEvent::ToolDecided {
+                model_turn,
+                call_id: call.id.clone(),
+                tool: call.name.clone(),
+                action,
+                decision: decision.clone(),
+            },
+            events,
+        )?;
+
+        if let ApprovalDecision::Denied { reason } = decision {
+            return self.finish_call(
+                model_turn,
+                call.id,
+                ToolOutput::error(format!("refused by approval policy: {reason}")),
+                events,
+            );
+        }
+
+        self.emit(
+            AgentEvent::ToolStarted {
+                model_turn,
+                call: call.clone(),
+            },
+            events,
+        )?;
+        let output = self
+            .tools
+            .execute(&call)
+            .await
+            .unwrap_or_else(|error| ToolOutput::error(error.to_string()));
+        self.finish_call(model_turn, call.id, output, events)
+    }
+
+    fn finish_call(
+        &mut self,
+        model_turn: u32,
+        call_id: String,
+        output: ToolOutput,
+        events: &mut Vec<AgentEvent>,
+    ) -> Result<ToolResult, AgentError> {
+        let result = ToolResult { call_id, output };
+        self.emit(
+            AgentEvent::ToolFinished {
+                model_turn,
+                result: result.clone(),
+            },
+            events,
+        )?;
+        Ok(result)
+    }
+
+    fn emit(&mut self, event: AgentEvent, events: &mut Vec<AgentEvent>) -> Result<(), AgentError> {
+        self.sink.emit(&event)?;
+        events.push(event);
+        Ok(())
+    }
+}
+
+fn cancelled(events: Vec<AgentEvent>, text: String, model_turns: u32) -> RunResult {
+    RunResult {
+        events,
+        text,
+        stop_reason: StopReason::Cancelled,
+        model_turns,
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum AgentError {
     #[error(transparent)]
     Model(#[from] ModelError),
+    #[error(transparent)]
+    Sink(#[from] SinkError),
     #[error("model stream ended without a terminal event")]
     StreamEndedWithoutFinish,
     #[error("provider emitted an event after its terminal event")]
@@ -197,158 +394,4 @@ pub enum AgentError {
     DuplicateToolCallId(String),
     #[error("model-turn limit reached after {0} turns")]
     ModelTurnLimit(u32),
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::VecDeque;
-    use std::sync::Mutex;
-
-    use futures_util::stream;
-    use gyr_model::ModelEventStream;
-    use gyr_protocol::ModelProfile;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    use super::*;
-
-    struct ScriptedSession {
-        profile: ModelProfile,
-        turns: VecDeque<Vec<ModelEvent>>,
-        inputs: Vec<TurnInput>,
-    }
-
-    impl ModelSession for ScriptedSession {
-        fn profile(&self) -> &ModelProfile {
-            &self.profile
-        }
-
-        fn next(&mut self, input: TurnInput) -> gyr_model::ModelFuture<'_, ModelEventStream> {
-            self.inputs.push(input);
-            let turn = self.turns.pop_front();
-            Box::pin(async move {
-                let events = turn.ok_or_else(|| {
-                    ModelError::Protocol("scripted provider has no next turn".into())
-                })?;
-                Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as ModelEventStream)
-            })
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingTools {
-        calls: Mutex<Vec<ToolCall>>,
-    }
-
-    impl ToolRuntime for RecordingTools {
-        fn execute(&self, call: &ToolCall) -> ToolFuture<'_> {
-            self.calls
-                .lock()
-                .expect("tool call lock")
-                .push(call.clone());
-            Box::pin(async { Ok(ToolOutput::success("fn main() {}")) })
-        }
-    }
-
-    #[tokio::test]
-    async fn completes_a_tool_round_trip() {
-        let call = ToolCall {
-            id: "call-1".into(),
-            name: "read".into(),
-            arguments: json!({"path": "src/main.rs"}),
-        };
-        let session = ScriptedSession {
-            profile: gyr_model::builtin_profiles().remove(0),
-            turns: VecDeque::from([
-                vec![
-                    ModelEvent::Started {
-                        response_id: Some("response-1".into()),
-                    },
-                    ModelEvent::ToolCallCompleted { call: call.clone() },
-                    ModelEvent::Finished {
-                        reason: StopReason::ToolUse,
-                    },
-                ],
-                vec![
-                    ModelEvent::Started {
-                        response_id: Some("response-2".into()),
-                    },
-                    ModelEvent::TextDelta {
-                        text: "The file is small.".into(),
-                    },
-                    ModelEvent::Finished {
-                        reason: StopReason::EndTurn,
-                    },
-                ],
-            ]),
-            inputs: Vec::new(),
-        };
-        let mut agent = Agent::new(session, RecordingTools::default(), AgentConfig::default());
-
-        let result = agent.run("inspect the entry point").await.unwrap();
-
-        assert_eq!(result.text, "The file is small.");
-        assert_eq!(result.stop_reason, StopReason::EndTurn);
-        assert_eq!(
-            agent.session().inputs,
-            vec![
-                TurnInput::User {
-                    content: "inspect the entry point".into(),
-                },
-                TurnInput::ToolResults {
-                    results: vec![ToolResult {
-                        call_id: "call-1".into(),
-                        output: ToolOutput::success("fn main() {}"),
-                    }],
-                },
-            ]
-        );
-        assert_eq!(result.events.len(), 8);
-    }
-
-    #[tokio::test]
-    async fn rejects_a_stream_without_a_terminal_event() {
-        let session = ScriptedSession {
-            profile: gyr_model::builtin_profiles().remove(0),
-            turns: VecDeque::from([vec![ModelEvent::TextDelta {
-                text: "unfinished".into(),
-            }]]),
-            inputs: Vec::new(),
-        };
-        let mut agent = Agent::new(session, RecordingTools::default(), AgentConfig::default());
-
-        let error = agent.run("hello").await.unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "model stream ended without a terminal event"
-        );
-    }
-
-    #[tokio::test]
-    async fn rejects_duplicate_tool_call_ids_across_model_turns() {
-        let call = ToolCall {
-            id: "duplicate".into(),
-            name: "read".into(),
-            arguments: json!({"path": "Cargo.toml"}),
-        };
-        let tool_turn = || {
-            vec![
-                ModelEvent::ToolCallCompleted { call: call.clone() },
-                ModelEvent::Finished {
-                    reason: StopReason::ToolUse,
-                },
-            ]
-        };
-        let session = ScriptedSession {
-            profile: gyr_model::builtin_profiles().remove(0),
-            turns: VecDeque::from([tool_turn(), tool_turn()]),
-            inputs: Vec::new(),
-        };
-        let mut agent = Agent::new(session, RecordingTools::default(), AgentConfig::default());
-
-        let error = agent.run("read twice").await.unwrap_err();
-
-        assert_eq!(error.to_string(), "provider reused tool call id duplicate");
-    }
 }

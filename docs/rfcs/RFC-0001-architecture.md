@@ -183,15 +183,21 @@ chosen that retention mode.
 
 ## 10. Build order
 
-1. Provider-neutral loop and fake-provider integration tests.
-2. Read, search and exact patch tools in a temporary workspace.
+1. Provider-neutral loop and fake-provider integration tests. **Done.**
+2. Read, search and exact patch tools in a temporary workspace. **Done.**
 3. Qwen adapter, because its self-hosted protocol is easiest to inspect and the
-   model family exposes the widest behavioural range.
-4. OpenAI Responses adapter and API-key authentication.
-5. Anthropic Messages adapter and API-key authentication.
-6. Approval UI and OS sandbox enforcement.
-7. Rust diagnostic gate and representative eval corpus.
-8. ChatGPT OAuth, after the transport is independently sound.
+   model family exposes the widest behavioural range. **Done.**
+4. OpenAI Responses adapter and API-key authentication. **Done.**
+5. Anthropic Messages adapter and API-key authentication. **Done.**
+6. Approval UI and OS sandbox enforcement. **Approval done** in RFC-0006, along
+   with the session log, cancellation and a one-shot `gyr run`. **The sandbox is
+   not**, so the current boundary is a filesystem fence and a policy, not an
+   operating-system boundary.
+7. Process execution and the structured `cargo` tool, which the sandbox and the
+   diagnostic gate both depend on.
+8. Rust diagnostic gate and representative eval corpus.
+9. Interactive terminal interface.
+10. ChatGPT OAuth, after the transport is independently sound.
 
 Each stage must produce a working vertical slice. A directory full of interfaces
 whose behaviour is promised for later is not progress, although it can look
