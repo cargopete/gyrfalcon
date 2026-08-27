@@ -275,6 +275,7 @@ pub fn describe_call(call: &ToolCall) -> String {
                 None => format!("{query:?}"),
             }
         }),
+        "list" => Some(argument_string(&call.arguments, "path").unwrap_or_else(|| ".".to_owned())),
         "apply_patch" => argument_string(&call.arguments, "path"),
         "exec" => call
             .arguments

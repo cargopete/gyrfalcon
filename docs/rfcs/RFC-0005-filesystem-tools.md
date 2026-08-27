@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | implemented M0 subset; wired in M1 |
+| Status | implemented M0 subset; wired in M1; `list` added M6 |
 | Date | 2026-08-23 |
 | Depends on | RFC-0001 |
 
@@ -113,12 +113,55 @@ Source:
 
 - <https://docs.rs/sha2/0.11.0/sha2/>
 
-## 6. Verification and remaining work
+## 6. The `list` tool
 
-Eleven deterministic temporary-workspace tests cover bounded reading, hashing,
+**Added 2026-08-27, on evidence rather than on a hunch.** RFC-0012's first
+six-case corpus run caught the model reaching for
+`exec find . -name "*.rs"`. `search` finds text and `read` reads a known path;
+neither answers "what files are here", so a shell was being used to get a
+capability the tool surface lacked rather than a syntax it lacked.
+
+`list` takes an optional `path` and an optional `depth`, walks with the same
+`ignore` rules `search` uses, and returns each entry's workspace-relative path,
+whether it is a file or a directory, and a file's byte length. It is
+`ToolClass::ReadOnly`.
+
+Using the search walk rather than a plain directory read is the point. A listing
+that included `target/` would be mostly build output and would cost more context
+than it returned, which is why this is not `exec ls` with a nicer name.
+
+Default limits are 500 entries and 32 KiB. `total_entries` counts everything the
+walk saw, so a capped listing never reads as a complete one, which is the same
+rule the other three tools follow.
+
+**Measured on 2026-08-27**, by re-running the same six-case corpus against the
+same model with only this tool added:
+
+| | before | after |
+|---|---:|---:|
+| `exec` calls across the corpus | 1 | **0** |
+| `list` calls across the corpus | 0 | **2** |
+| cases passing | 6/6 | 6/6 |
+| input tokens | 112,942 | 112,003 |
+
+`list` was called in two cases rather than the one that had reached for `exec`.
+In `fix-failing-test` the model previously began with `cargo test` and worked
+backwards; it now begins with `list`, and drops one of its three `cargo test`
+runs. So the missing capability was costing something in a case where nobody had
+noticed it missing.
+
+The listing it received in `rename-across-files` was five entries with byte
+lengths and no `target/`, from a `depth: 3` call on `.`. That is the argument for
+the ignore-aware walk in one line: `exec ls -R` would have returned the build
+directory and cost more context than it returned.
+
+## 7. Verification and remaining work
+
+Fifteen deterministic temporary-workspace tests cover bounded reading, hashing,
 ignore-aware search, ambiguous edits, stale edits, parent traversal, symlink
-escape, and the classification rules RFC-0006 added. The workspace passes 47
-tests and Clippy with warnings denied, measured on 2026-08-27.
+escape, the classification rules RFC-0006 added, and `list`: its ignore
+awareness, its path and depth narrowing, its entry cap, and its refusal to
+escape the workspace.
 
 Approvals arrived with RFC-0006. This slice still does not include OS
 sandboxing, process execution, structured Cargo diagnostics, cancellation of a

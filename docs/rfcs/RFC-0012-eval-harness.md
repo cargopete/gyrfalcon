@@ -242,6 +242,23 @@ is the better change. Assertions cannot tell the difference between the obvious
 fix and the good one, which is section 8's argument for why a judge is a
 different problem and not one to reach for yet.
 
+### 9.4 The loop closing, 2026-08-27
+
+Section 9.3's second finding was that the corpus's one `exec` call was a
+directory listing rather than a pipeline. RFC-0005 section 6 added a `list`
+tool on that evidence, and the same corpus was re-run against the same model
+with nothing else changed.
+
+`exec` went from one call to zero. `list` was reached for in two cases rather
+than the one that had used `exec`. Six of six still passed, and the token total
+moved by under one percent.
+
+That is the whole point of the thing, so it is worth naming: a corpus produced a
+finding, the finding produced a change, and re-running the corpus confirmed the
+change did what it was supposed to and cost nothing. Two runs is not a
+methodology, but it is the shape the methodology has to take, and this is the
+first time this repository has closed that loop rather than reasoned about it.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is
@@ -250,8 +267,8 @@ different problem and not one to reach for yet.
   model can spend a great deal of wall time inside one turn.
 - How many runs of a live case are needed before its pass rate means anything,
   which is the question the corpus exists to start answering about itself.
-- Whether the missing capability behind the corpus's one `exec` call is a `list`
-  tool. One observation, recorded rather than acted on.
+- ~~Whether the missing capability behind the corpus's one `exec` call is a
+  `list` tool.~~ Answered in section 9.4: it was.
 - Whether the system prompt should ask for a mid-batch gate check, given that a
   model which reads before editing never reaches a state the gate could help
   with. Section 9.3.

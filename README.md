@@ -27,12 +27,14 @@ CI and evals.
   Chat Completions, each keeping its own conversation state so continuation does
   not lose reasoning items or content ordering. Recorded parser tests
   throughout; Qwen and Anthropic also have local HTTP/SSE wire tests.
-- **Six tools.** `read` returns bounded, numbered, fingerprinted ranges.
-  `search` is literal and ignore-aware with explicit totals. `apply_patch`
-  replaces one exact occurrence and refuses a stale or ambiguous edit. `exec`
-  runs one program with one argument vector. `cargo` runs a closed set of
-  subcommands and returns parsed diagnostics, so an `E0308` arrives as a level,
-  a code, a file, a line and a column rather than as a page of compiler output.
+- **Seven tools.** `read` returns bounded, numbered, fingerprinted ranges.
+  `search` is literal and ignore-aware with explicit totals. `list` shows what
+  is in the workspace, through the same ignore rules, so a listing is not mostly
+  build output. `apply_patch` replaces one exact occurrence and refuses a stale
+  or ambiguous edit. `exec` runs one program with one argument vector. `cargo`
+  runs a closed set of subcommands and returns parsed diagnostics, so an `E0308`
+  arrives as a level, a code, a file, a line and a column rather than as a page
+  of compiler output.
 - **A diagnostic gate**, which is the part that makes this a Rust agent rather
   than a general one. A multi-site Rust change passes through a state that does
   not compile, so the question after each edit is not "does it build" but "is
@@ -90,15 +92,26 @@ configuration file.
 The eval corpus is six cases long, which is a start rather than a corpus. All
 six pass against `claude-sonnet-5` for about twenty-seven pence a run.
 
-It has already changed two of this repository's beliefs, both about Gyrfalcon
-rather than about any model. The gate was called in one case of six, and the
-case built specifically to force a red state passed through one without the
-model ever looking, because it read three files before editing any of them. And
-the single `exec` call in six cases was `find . -name "*.rs"` — a directory
-listing, not a pipeline, which is evidence against the worry that a missing
-shell blocks tasks and evidence for a missing `list` tool. RFC-0012 section 9.3
-has both, and section 9.2 has the first live run, where the thing the corpus
-found was a badly written case rather than anything about the model.
+It has already changed this repository's mind twice, both times about Gyrfalcon
+rather than about any model.
+
+The single `exec` call across six cases was `find . -name "*.rs"` — a directory
+listing, not a pipeline. That is evidence against the worry that a missing shell
+blocks tasks, and evidence for a missing capability. `list` was built on it, and
+re-running the same corpus against the same model took `exec` from one call to
+zero while `list` was reached for in two cases, with six of six still passing.
+A finding produced a change and the corpus confirmed the change. That loop
+closing is the point of the whole exercise.
+
+The other belief is less comfortable. The gate was called in one case of six,
+and the case built specifically to force a red state passed through one without
+the model ever looking, because it read three files before editing any of them.
+The gate helps a model that checks mid-batch; whether to ask for that comes
+before tuning it.
+
+RFC-0012 sections 9.2 through 9.4 have all of it, including the first live run,
+where the thing the corpus found was a badly written case rather than anything
+about the model.
 
 These are missing features. None of them is delegated to the system prompt, and
 none is claimed to be present.

@@ -33,6 +33,8 @@ pub struct ToolLimits {
     pub max_search_bytes: usize,
     pub max_search_files: usize,
     pub max_search_file_bytes: u64,
+    pub max_list_entries: usize,
+    pub max_list_bytes: usize,
 }
 
 impl Default for ToolLimits {
@@ -44,6 +46,8 @@ impl Default for ToolLimits {
             max_search_bytes: 64 * 1_024,
             max_search_files: 20_000,
             max_search_file_bytes: 2 * 1_024 * 1_024,
+            max_list_entries: 500,
+            max_list_bytes: 32 * 1_024,
         }
     }
 }
@@ -102,6 +106,20 @@ impl WorkspaceTools {
                 }),
             },
             ToolDefinition {
+                name: "list".into(),
+                description: "List the files and directories in the workspace, respecting ignore \
+                              files. Use this to find out what is there before reading anything."
+                    .into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "depth": {"type": "integer", "minimum": 1}
+                    },
+                    "additionalProperties": false
+                }),
+            },
+            ToolDefinition {
                 name: "apply_patch".into(),
                 description: "Replace one exact UTF-8 string in a previously read workspace file."
                     .into(),
@@ -136,6 +154,10 @@ impl WorkspaceTools {
                 let _: SearchArguments = parse_arguments(&call.arguments, "search")?;
                 Ok(ToolAction::read_only())
             }
+            "list" => {
+                let _: ListArguments = parse_arguments(&call.arguments, "list")?;
+                Ok(ToolAction::read_only())
+            }
             "apply_patch" => {
                 let arguments: PatchArguments = parse_arguments(&call.arguments, "apply_patch")?;
                 let resolved = self.root.resolve_file(&arguments.path)?;
@@ -149,6 +171,7 @@ impl WorkspaceTools {
         match call.name.as_str() {
             "read" => self.read(parse_arguments(&call.arguments, "read")?),
             "search" => self.search(parse_arguments(&call.arguments, "search")?),
+            "list" => self.list(&parse_arguments(&call.arguments, "list")?),
             "apply_patch" => self.apply_patch(parse_arguments(&call.arguments, "apply_patch")?),
             name => Err(ToolError::new(format!("unknown tool {name:?}"))),
         }
@@ -277,6 +300,72 @@ impl WorkspaceTools {
             truncated,
         };
         json_output(&output)
+    }
+
+    /// Lists what is in the workspace, respecting the same ignore rules search
+    /// uses so a listing is not mostly build output.
+    ///
+    /// Added because the eval corpus caught a model reaching for
+    /// `exec find . -name "*.rs"`: `search` finds text and `read` reads a known
+    /// path, and neither answered "what files are here". RFC-0005 section 7.
+    fn list(&self, arguments: &ListArguments) -> Result<ToolOutput, ToolError> {
+        let relative = arguments.path.as_deref().unwrap_or(".");
+        let root = self.root.resolve_directory(relative)?;
+        let mut builder = WalkBuilder::new(&root);
+        builder
+            .follow_links(false)
+            .parents(false)
+            .require_git(false)
+            .sort_by_file_path(std::cmp::Ord::cmp);
+        if let Some(depth) = arguments.depth {
+            builder.max_depth(Some(depth));
+        }
+
+        let mut entries = Vec::new();
+        let mut total_entries = 0_usize;
+        let mut output_bytes = 0_usize;
+        let mut truncated = false;
+        for entry in builder.build() {
+            let entry =
+                entry.map_err(|error| ToolError::new(format!("list walk failed: {error}")))?;
+            // The walk yields its own root first, which is not an entry in it.
+            if entry.path() == root {
+                continue;
+            }
+            let Some(kind) = entry.file_type() else {
+                continue;
+            };
+            total_entries += 1;
+            if entries.len() == self.limits.max_list_entries {
+                truncated = true;
+                continue;
+            }
+            let listed = ListEntry {
+                path: self.root.relative(entry.path())?,
+                kind: if kind.is_dir() { "directory" } else { "file" },
+                bytes: if kind.is_file() {
+                    entry.metadata().ok().map(|metadata| metadata.len())
+                } else {
+                    None
+                },
+            };
+            let encoded = serde_json::to_vec(&listed)
+                .map_err(|error| ToolError::new(format!("cannot encode entry: {error}")))?
+                .len();
+            if output_bytes.saturating_add(encoded) > self.limits.max_list_bytes {
+                truncated = true;
+                continue;
+            }
+            output_bytes += encoded;
+            entries.push(listed);
+        }
+
+        json_output(&ListOutput {
+            path: relative.to_owned(),
+            entries,
+            total_entries,
+            truncated,
+        })
     }
 
     fn apply_patch(&self, arguments: PatchArguments) -> Result<ToolOutput, ToolError> {
@@ -463,6 +552,30 @@ struct SearchMatch {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ListArguments {
+    path: Option<String>,
+    depth: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListEntry {
+    path: String,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListOutput {
+    path: String,
+    entries: Vec<ListEntry>,
+    /// Everything the walk saw, so a capped list never reads as a whole one.
+    total_entries: usize,
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PatchArguments {
     path: String,
     expected_sha256: String,
@@ -537,6 +650,89 @@ mod tests {
     fn output_json(output: &ToolOutput) -> Value {
         assert!(!output.is_error);
         serde_json::from_str(&output.content).unwrap()
+    }
+
+    #[test]
+    fn list_reports_files_directories_and_sizes_respecting_ignore_files() {
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "one\ntwo\n");
+        workspace.write("src/parser.rs", "three\n");
+        workspace.write("target/debug/artifact", "build output\n");
+        workspace.write(".gitignore", "target\n");
+        let tools = workspace.tools();
+
+        let output = tools.execute_sync(&call("list", json!({}))).unwrap();
+        let output = output_json(&output);
+
+        let paths: Vec<&str> = output["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["path"].as_str().unwrap())
+            .collect();
+        assert_eq!(paths, vec!["src", "src/lib.rs", "src/parser.rs"]);
+        assert_eq!(output["entries"][0]["kind"], "directory");
+        assert_eq!(output["entries"][1]["kind"], "file");
+        assert_eq!(output["entries"][1]["bytes"], 8);
+        assert_eq!(output["total_entries"], 3);
+        assert_eq!(output["truncated"], false);
+        // A hidden file and ignored build output are both absent, which is the
+        // whole reason this is not `exec ls`.
+        assert!(!paths.contains(&"target"), "{paths:?}");
+        assert!(!paths.contains(&".gitignore"), "{paths:?}");
+    }
+
+    #[test]
+    fn list_can_be_narrowed_by_path_and_depth() {
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "one\n");
+        workspace.write("src/deep/nested.rs", "two\n");
+        let tools = workspace.tools();
+
+        let shallow = output_json(
+            &tools
+                .execute_sync(&call("list", json!({"path": "src", "depth": 1})))
+                .unwrap(),
+        );
+        let deep = output_json(
+            &tools
+                .execute_sync(&call("list", json!({"path": "src"})))
+                .unwrap(),
+        );
+
+        assert_eq!(shallow["total_entries"], 2);
+        assert_eq!(deep["total_entries"], 3);
+    }
+
+    #[test]
+    fn list_says_how_many_entries_it_did_not_return() {
+        let workspace = TestWorkspace::new();
+        for index in 0..8 {
+            workspace.write(&format!("src/file{index}.rs"), "x\n");
+        }
+        let limits = ToolLimits {
+            max_list_entries: 3,
+            ..ToolLimits::default()
+        };
+        let tools = WorkspaceTools::new(&workspace.path, limits).unwrap();
+
+        let output = output_json(&tools.execute_sync(&call("list", json!({}))).unwrap());
+
+        assert_eq!(output["entries"].as_array().unwrap().len(), 3);
+        assert_eq!(output["total_entries"], 9);
+        assert_eq!(output["truncated"], true);
+    }
+
+    #[test]
+    fn list_cannot_escape_the_workspace() {
+        let workspace = TestWorkspace::new();
+        let tools = workspace.tools();
+
+        let error = tools
+            .execute_sync(&call("list", json!({"path": ".."})))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("remain inside the workspace"));
     }
 
     #[test]

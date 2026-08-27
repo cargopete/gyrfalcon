@@ -178,10 +178,15 @@ endpoint over this repository:
   cases `exec` was called once, for `find . -name "*.rs"`. Not a pipeline, and
   not a workaround for one. The model wanted a capability the tool surface lacks
   rather than a syntax it lacks.
-- Therefore a newer question, which the evidence points at more strongly than
-  the old one: whether `list` should be a tool. `search` finds text and `read`
-  reads a known path; neither answers "what files are here", which is what that
-  one `exec` call was for.
+- ~~Therefore a newer question: whether `list` should be a tool.~~ **Answered
+  and built.** RFC-0005 section 6 added `list`, and re-running the same corpus
+  against the same model took `exec` from one call to zero while `list` was
+  reached for in two cases. The shell was standing in for a missing capability,
+  and with the capability present it was not wanted at all.
+
+  This does not retire the pipeline question, it sharpens it: across six cases
+  and two runs, nothing has yet reached for a shell to compose anything. A
+  corpus of six is still a corpus of six.
 - Whether `directory` should accept a path that does not exist yet, which would
   need the fence to reason about a parent rather than a target.
 - Whether the filtered environment should gain a project-declared allow-list, so
