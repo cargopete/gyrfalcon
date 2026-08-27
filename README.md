@@ -89,9 +89,10 @@ rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Conversation state across process restarts. Log replay. Compaction. A
 configuration file.
 
-The eval corpus is seven cases long, which is a start rather than a corpus. All
-seven pass against `claude-sonnet-5`, the six-case sweep costing about
-twenty-seven pence a run.
+The eval corpus is eight cases long, which is a start rather than a corpus. All
+eight pass against `claude-sonnet-5`, the six-case sweep costing about
+twenty-seven pence a run. It has now been used to settle an argument about
+Gyrfalcon's own design as well as to measure a model.
 
 It has already changed this repository's mind twice, both times about Gyrfalcon
 rather than about any model.
@@ -113,12 +114,23 @@ misuse easy, and the description that invited it, changed behaviour measurably:
 across four multi-edit cases the gate is now called before the first edit in two
 of them, reproducibly across two identical runs.
 
-So the gate is called as designed about half the time it could be. What is still
-untested is whether its answer ever changes a decision: every verdict a live
-model has received has been `green` or `unchanged`, and `improving`,
-`regressing`, `stalled` and `exhausted` have never been seen outside the tests.
-RFC-0011 section 12.1 has all of it, including why the next experiment is a
-harder case rather than a louder prompt.
+That doubt is now largely withdrawn, and the thing that withdrew it was another
+case. `add-a-field` gives a struct a `String` field, which forces `Copy` off it,
+which breaks every place that relied on an implicit copy — a cascade that cannot
+be read ahead, because nothing in `readings[index - 1]` says a copy happens
+there. Twice running, the model took a baseline, made the change that broke the
+build, was told `regressing` — three errors introduced against a clean baseline
+— and only then went and read the two files it had not yet opened. That is the
+mid-batch loop the gate was designed for, and the first live sighting of any
+verdict other than `green` or `unchanged`.
+
+The lesson was about writing cases rather than about the gate: difficulty is not
+the variable, predictability is. The harder-looking case that came before it was
+dispatched in one pass because its whole cascade was visible by reading.
+
+What remains open is narrower and better posed. `cargo check` would have
+reported the same three errors; what the gate added was the comparison rather
+than the list. Whether that framing changes what a model does next is untested.
 
 Two identical runs also gave the corpus its first noise floor: gate usage
 identical, ±1 turn per case, 6.6% in tokens. Enough to read a tool histogram

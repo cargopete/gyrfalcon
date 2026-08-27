@@ -264,6 +264,47 @@ The honest position in the meantime is that the gate is built, correct, tested,
 called as designed about half the time it could be, and has not yet been
 observed to change a decision.
 
+### 12.1.3 The premise, largely vindicated
+
+**Measured on 2026-08-27, reproduced twice.** Section 12.1.2 said the next
+experiment was a harder case rather than a louder prompt. RFC-0012's
+`add-a-field` case is that: a struct gains a `String` field, which forces `Copy`
+off it, which breaks every place that relied on an implicit copy. Nothing in
+`readings[index - 1]` says a copy happens there, and fixing the first error
+reveals a second that was masked by it. The cascade is invisible in the source
+and legible only to the compiler.
+
+Both runs produced the same shape:
+
+```text
+search  read reading.rs  gate start  apply_patch
+gate check -> regressing   (baseline 0 errors -> 3, introduced 3, 1 file changed)
+read stats.rs  read window.rs  apply_patch  apply_patch
+gate check -> green
+```
+
+Three things worth naming.
+
+It is the first live occurrence of any verdict other than `green` or
+`unchanged`. `regressing` exists outside the tests.
+
+The model **did not read everything before editing.** It read one file, made the
+change that broke the build, was told it had introduced three errors, and only
+then went and read the two files it had not seen. That is the mid-batch loop
+RFC-0001 section 7 assumed and section 12.1 had begun to doubt.
+
+And it took two things to get here, both of which came from evals rather than
+from thinking: a case whose cascade cannot be read ahead of time, and a tool
+description that says to call `start` before the first edit.
+
+**What this does not establish.** `cargo check` would have reported the same
+three errors. What the gate added was the comparison — "you introduced three
+against a clean baseline" rather than a list of three — and whether that framing
+changes what a model does next is untested and would need a case run both ways.
+So the premise holds: batches do go red, and a model does act on being told. The
+gate's marginal value over a plain `cargo check` is the open question, and it is
+a much better specified one than section 12.1 could pose.
+
 ### 12.2 A bug the same run found
 
 `Unchanged`'s message read "Nothing was fixed here; a green build with no

@@ -312,6 +312,37 @@ answering "nothing to report" is not evidence about a tool's usefulness, and
 sixty pence spent producing a number nobody could interpret is worse than sixty
 pence unspent.
 
+### 9.7 An eighth case, and the verdict nobody had seen
+
+Section 9.6 said the next experiment was a harder case rather than a louder
+prompt, and named the property it needed: a batch that goes red in a way the
+model must react to. `add-a-field` has it. A struct gains a `String` field, which
+forces `Copy` off it, which breaks every implicit copy. Nothing in
+`readings[index - 1]` says a copy happens there, and fixing the first error
+reveals a second the first was masking.
+
+It passed twice, in eight and ten turns, for about ten pence a run, and both
+runs produced `gate: regressing, green`, the same tool histogram, and correct
+code. The `regressing` verdict is the first live sighting of anything other than
+`green` or `unchanged`, and the model responded to it by reading the two files
+it had not yet opened.
+
+Two lessons about writing cases, which is what this section is really about.
+
+**Difficulty is not the variable; predictability is.** `thread-a-result`
+(section 9.5) is harder in every ordinary sense — more files, more signatures,
+a `Result` threaded through call sites — and the model dispatched it in one pass
+because the whole cascade is visible by reading. `add-a-field` is a smaller
+change that cannot be read ahead, and it forced the loop. Three cases were spent
+learning that.
+
+**The corpus is now discriminating between designs rather than only between
+models.** RFC-0011 section 12.1 doubted the gate's premise; section 12.1.3
+substantially withdraws that doubt on the strength of these two runs, and
+replaces it with a sharper question the corpus can also answer. That is the
+first time a case has been written to settle an internal argument and has
+settled it.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is

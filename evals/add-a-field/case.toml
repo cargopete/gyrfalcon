@@ -1,0 +1,34 @@
+name = "add-a-field"
+prompt = """
+Give `Reading` a public `label: String` field, defaulting to an empty string in \
+`Reading::new`. `Reading` must not derive `Copy` afterwards, and you must not \
+add it back. Keep every public function signature exactly as it is, and leave \
+alone any file that does not need to change. `cargo check` must be clean when \
+you are done.
+"""
+max_turns = 20
+
+# The cascade here is invisible in the source: nothing in `readings[index - 1]`
+# says a copy happens there, and fixing the first error reveals a second that
+# was masked by it. If the gate's improving verdict is ever going to be seen in
+# a live run, it is here.
+[expect]
+cargo_check = "clean"
+files_changed = ["src/reading.rs", "src/stats.rs", "src/window.rs"]
+files_unchanged = ["Cargo.toml", "src/lib.rs", "src/summary.rs"]
+
+[[expect.contains]]
+file = "src/reading.rs"
+text = "label: String"
+
+[[expect.not_contains]]
+file = "src/reading.rs"
+text = "Copy"
+
+[[expect.contains]]
+file = "src/stats.rs"
+text = "pub fn highest(readings: &[Reading]) -> Option<Reading>"
+
+[[expect.contains]]
+file = "src/window.rs"
+text = "pub fn pairs(readings: &[Reading]) -> Vec<(Reading, Reading)>"
