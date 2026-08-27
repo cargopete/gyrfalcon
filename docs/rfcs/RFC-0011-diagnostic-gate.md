@@ -183,7 +183,13 @@ than at the last check. Keep going."
 
 - Whether `exhausted` should be two consecutive checks or a ratio over the
   batch. RFC-0012 records every gate verdict per case, so this is now a query
-  against a corpus rather than an opinion. The corpus is two cases long.
+  against a corpus rather than an opinion.
+- **A prior question, raised by RFC-0012 section 9.3.** Across six live cases the
+  gate was called in one, and the case built specifically to force a red state
+  did pass through one without the model ever looking: it read three files,
+  applied three patches, then checked once. The gate helps a model that checks
+  mid-batch. Whether the system prompt should ask for that, and whether it would
+  buy anything for the compile it costs, comes before tuning the threshold.
 - Whether a warning that was an error a moment ago should count as resolved,
   which it currently does, and whether that lets a batch launder errors into
   allow attributes.

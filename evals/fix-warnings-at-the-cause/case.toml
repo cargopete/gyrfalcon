@@ -1,0 +1,20 @@
+name = "fix-warnings-at-the-cause"
+prompt = """
+`cargo check` reports warnings in this crate. Fix each one at its cause: remove \
+what is genuinely unused and use what should be used. Do not silence anything \
+with an `allow` attribute, and do not delete the public API.
+"""
+max_turns = 14
+
+[expect]
+cargo_check = "clean"
+files_changed = ["src/lib.rs"]
+files_unchanged = ["Cargo.toml"]
+
+[[expect.not_contains]]
+file = "src/lib.rs"
+text = "allow("
+
+[[expect.contains]]
+file = "src/lib.rs"
+text = "pub fn total"

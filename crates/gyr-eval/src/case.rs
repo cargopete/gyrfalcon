@@ -41,6 +41,13 @@ pub struct Expectations {
     pub contains: Vec<TextExpectation>,
     #[serde(default)]
     pub not_contains: Vec<TextExpectation>,
+    /// Substrings the model's final answer must hold.
+    ///
+    /// Some tasks are answered rather than edited. Without this the harness's
+    /// no-change rule would make such a case unexpressible, and a corpus that
+    /// can only ask for edits will only ever learn about editing.
+    #[serde(default)]
+    pub answer_contains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

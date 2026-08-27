@@ -56,7 +56,9 @@ CI and evals.
   prompt, and assertions about the outcome. Assertions decide pass or fail;
   metrics decide nothing and are read back out of the session log the run
   produced, which is also how the log's sufficiency gets tested. A case where
-  nothing changed fails even if the code compiled.
+  nothing changed fails even if the code compiled, unless its deliverable is an
+  answer rather than an edit. Token totals are printed, so what a run cost is
+  visible without going to the invoice.
 
 ### What is enforced, and what is not
 
@@ -85,13 +87,18 @@ rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Conversation state across process restarts. Log replay. Compaction. A
 configuration file.
 
-The eval corpus is two cases long. The harness is real and tested; two cases is
-a mechanism rather than evidence, and the open questions in RFC-0010 and
-RFC-0011 are waiting on a corpus large enough to answer them.
+The eval corpus is six cases long, which is a start rather than a corpus. All
+six pass against `claude-sonnet-5` for about twenty-seven pence a run.
 
-It has been run against a real model once, and the first thing it found was a
-badly written case rather than anything about the model. RFC-0012 section 9.2
-records that, because the first thing an eval measures is the eval.
+It has already changed two of this repository's beliefs, both about Gyrfalcon
+rather than about any model. The gate was called in one case of six, and the
+case built specifically to force a red state passed through one without the
+model ever looking, because it read three files before editing any of them. And
+the single `exec` call in six cases was `find . -name "*.rs"` — a directory
+listing, not a pipeline, which is evidence against the worry that a missing
+shell blocks tasks and evidence for a missing `list` tool. RFC-0012 section 9.3
+has both, and section 9.2 has the first live run, where the thing the corpus
+found was a badly written case rather than anything about the model.
 
 These are missing features. None of them is delegated to the system prompt, and
 none is claimed to be present.

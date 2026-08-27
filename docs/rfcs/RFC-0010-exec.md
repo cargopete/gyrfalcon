@@ -174,9 +174,14 @@ endpoint over this repository:
 ## 10. Open questions
 
 - Whether pipelines earn a designed answer, and how often their absence actually
-  blocks a task. RFC-0012 built the harness that can count this: the tool
-  histogram per case is exactly the measurement. The corpus is not yet large
-  enough for the count to mean anything.
+  blocks a task. **Evidence so far, from RFC-0012 section 9.3:** across six live
+  cases `exec` was called once, for `find . -name "*.rs"`. Not a pipeline, and
+  not a workaround for one. The model wanted a capability the tool surface lacks
+  rather than a syntax it lacks.
+- Therefore a newer question, which the evidence points at more strongly than
+  the old one: whether `list` should be a tool. `search` finds text and `read`
+  reads a known path; neither answers "what files are here", which is what that
+  one `exec` call was for.
 - Whether `directory` should accept a path that does not exist yet, which would
   need the fence to reason about a parent rather than a target.
 - Whether the filtered environment should gain a project-declared allow-list, so

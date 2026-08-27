@@ -1,0 +1,15 @@
+name = "fix-failing-test"
+prompt = """
+One of this crate's tests fails. Run the tests, find which one, and fix the \
+code so that every test passes. Do not change the tests themselves.
+"""
+max_turns = 16
+
+[expect]
+cargo_check = "clean"
+files_changed = ["src/lib.rs"]
+files_unchanged = ["Cargo.toml"]
+
+[[expect.contains]]
+file = "src/lib.rs"
+text = "fn rounds_half_up"

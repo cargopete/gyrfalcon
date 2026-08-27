@@ -1,0 +1,12 @@
+name = "count-without-editing"
+prompt = """
+How many calls to `.unwrap()` are there in src/lib.rs? State the number. \
+Do not change any file.
+"""
+max_turns = 8
+
+# Its deliverable is an answer, so the harness's no-change rule does not apply
+# and the assertions run the other way: nothing may move.
+[expect]
+files_unchanged = ["src/lib.rs", "Cargo.toml"]
+answer_contains = ["3"]

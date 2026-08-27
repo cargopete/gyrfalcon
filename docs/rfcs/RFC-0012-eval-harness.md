@@ -191,6 +191,57 @@ The tool sequence on the passing run was `search`, `read`, `apply_patch`,
 `cargo`. No `exec`, which is one data point against RFC-0010's worry that the
 absence of a shell blocks tasks, and precisely one.
 
+### 9.3 Six cases, 2026-08-27
+
+The corpus grew to six and ran against `claude-sonnet-5`: 112,942 input and
+4,535 output tokens, about twenty-seven pence, six passes. Every result was
+correct code. Four findings, two of which are about Gyrfalcon rather than about
+the model, which is the more useful direction.
+
+**The gate was called in one case out of six.** `rename-across-files` was built
+specifically to force the red state RFC-0011 exists for: seven occurrences of a
+type across three files, unrenameable in one edit. The batch **did** pass
+through a red state, twice, between three sequential `apply_patch` calls. The
+model simply never looked. It read all three files first, applied all three
+patches, then ran `cargo check` once and was done.
+
+So the gate's premise holds and its usefulness does not follow from it. The gate
+helps a model that checks mid-batch; a model that reads everything before
+editing never reaches a state it needs help navigating. That is a finding about
+the gate's value rather than about the model's competence, and it sharpens
+RFC-0011's open question about the `exhausted` threshold into a prior one:
+whether the system prompt should ask for a mid-batch check at all, and whether
+that would help or merely cost a compile.
+
+**The one `exec` call in six cases was `find . -name "*.rs"`.** Not a pipeline. A
+directory listing, which is the one thing the tool surface does not offer:
+`search` finds text and `read` reads a known path, and neither answers "what
+files are here". The model reached for a shell to get a capability rather than a
+syntax.
+
+That is a second piece of evidence against RFC-0010's worry that the absence of
+pipes blocks tasks, and the first piece of evidence for a missing `list` tool.
+One observation is not a mandate, so it is recorded as an open question rather
+than built.
+
+**The closed Cargo argument surface was sufficient.** `fix-failing-test` ran
+`cargo test`, edited, ran `cargo test` again, then `cargo test` with
+`filter: "tests::"`. RFC-0008 guessed at which narrowing arguments were worth
+having and this is the first evidence that the guess covered a real use.
+
+**The answer-assertion path works end to end.** `count-without-editing` changed
+nothing, which the harness's no-change rule exempts because the case asserts on
+the answer, and replied "There are 3 calls to `.unwrap()` in src/lib.rs - on
+lines 2, 6, and 10." A corpus that could only ask for edits would only ever have
+learned about editing.
+
+One aside worth keeping. In `fix-warnings-at-the-cause` the obvious fix for an
+unused binding is to delete it. The model instead used it, as
+`HashSet::with_capacity(capacity_hint)`, which is what the prompt asked for and
+is the better change. Assertions cannot tell the difference between the obvious
+fix and the good one, which is section 8's argument for why a judge is a
+different problem and not one to reach for yet.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is
@@ -199,3 +250,8 @@ absence of a shell blocks tasks, and precisely one.
   model can spend a great deal of wall time inside one turn.
 - How many runs of a live case are needed before its pass rate means anything,
   which is the question the corpus exists to start answering about itself.
+- Whether the missing capability behind the corpus's one `exec` call is a `list`
+  tool. One observation, recorded rather than acted on.
+- Whether the system prompt should ask for a mid-batch gate check, given that a
+  model which reads before editing never reaches a state the gate could help
+  with. Section 9.3.

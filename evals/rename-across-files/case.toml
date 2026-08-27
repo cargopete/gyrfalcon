@@ -1,0 +1,31 @@
+name = "rename-across-files"
+prompt = """
+Rename the `Token` type to `Lexeme` everywhere in this crate, including the \
+re-export and every use site. `cargo check` must be clean when you are done.
+"""
+max_turns = 20
+
+[expect]
+cargo_check = "clean"
+files_changed = ["src/lib.rs", "src/parser.rs", "src/runner.rs"]
+files_unchanged = ["Cargo.toml"]
+
+[[expect.contains]]
+file = "src/parser.rs"
+text = "pub struct Lexeme"
+
+[[expect.contains]]
+file = "src/runner.rs"
+text = "Lexeme"
+
+[[expect.not_contains]]
+file = "src/parser.rs"
+text = "Token"
+
+[[expect.not_contains]]
+file = "src/runner.rs"
+text = "Token"
+
+[[expect.not_contains]]
+file = "src/lib.rs"
+text = "Token"

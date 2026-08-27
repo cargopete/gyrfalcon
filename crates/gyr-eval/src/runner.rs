@@ -115,15 +115,19 @@ pub async fn run_case(
     let duration_ms = started.elapsed().as_millis();
 
     let mut failures = Vec::new();
-    if let Err(error) = &run {
-        failures.push(format!("the run did not complete: {error}"));
-    }
+    let answer = match &run {
+        Ok(result) => result.text.clone(),
+        Err(error) => {
+            failures.push(format!("the run did not complete: {error}"));
+            String::new()
+        }
+    };
 
     let after = fingerprint_tree(&workspace)?;
     let files_changed = changed_files(&before, &after);
     let metrics = metrics::from_log(&log_path)?;
 
-    check(case, &workspace, &files_changed, &mut failures);
+    check(case, &workspace, &files_changed, &answer, &mut failures);
     if let Some(expectation) = case.expect.cargo_check
         && let Some(failure) = check_cargo(&workspace, sandbox, expectation).await?
     {
@@ -182,13 +186,30 @@ fn changed_files(
 }
 
 /// Applies the case's assertions, and the one the harness applies to every case.
-fn check(case: &Case, workspace: &Path, files_changed: &[String], failures: &mut Vec<String>) {
+fn check(
+    case: &Case,
+    workspace: &Path,
+    files_changed: &[String],
+    answer: &str,
+    failures: &mut Vec<String>,
+) {
     // The harness's own rule, so a case cannot forget it. RFC-0011 made "a
     // green build with no material diff is not success" a verdict a model reads;
     // here it is a rule the corpus applies to itself, because a corpus that can
     // pass by doing nothing measures nothing.
-    if files_changed.is_empty() {
+    //
+    // A case that asserts on the answer is exempt, because its deliverable is
+    // the answer. The rule is that a case must assert something material
+    // happened, in the workspace or in what was said, not that every task ends
+    // in an edit.
+    if files_changed.is_empty() && case.expect.answer_contains.is_empty() {
         failures.push("nothing in the workspace changed".to_owned());
+    }
+
+    for wanted in &case.expect.answer_contains {
+        if !answer.contains(wanted.as_str()) {
+            failures.push(format!("the answer does not mention {wanted:?}"));
+        }
     }
 
     for expected in &case.expect.files_changed {
