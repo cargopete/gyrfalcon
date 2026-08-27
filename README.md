@@ -17,12 +17,17 @@ are implemented with recorded parser tests; Qwen and Anthropic also have local
 HTTP/SSE wire tests. Read, ignore-aware literal search and stale-checked exact
 patch tools are wired to the loop behind the approval layer.
 
-Process execution, the structured `cargo` tool and the Rust diagnostic gate do
-not exist yet. Neither does the operating-system sandbox: what is enforced today
-is a filesystem fence plus approval, which is not the same claim. There is no
-interactive terminal interface, no conversation state across invocations, and no
-log replay. This is a usable single-shot agent and not yet a usable coding
-session, and the repository does not claim otherwise.
+A structured `cargo` tool runs a closed set of subcommands and returns parsed
+diagnostics rather than compiler output: an `E0308` arrives as a level, a code, a
+file, a line and a column. Every Cargo call is classified as a process, is never
+auto-allowed by any policy, and can be killed by Ctrl-C or by its wall clock.
+
+There is no general `exec`, because there is no operating-system sandbox. What
+is enforced today is a filesystem fence, a closed argument surface and approval,
+which is a smaller claim than a sandbox and the only one being made. The Rust
+diagnostic gate, the interactive terminal interface, conversation state across
+invocations and log replay do not exist yet. This is a usable single-shot agent
+and not yet a usable coding session, and the repository does not claim otherwise.
 
 The initial model targets are:
 
@@ -45,6 +50,7 @@ runtimes may follow once they pass the same conformance suite.
 - [RFC-0004: Local subscription model probes](docs/rfcs/RFC-0004-local-model-probes.md)
 - [RFC-0005: Workspace filesystem tools](docs/rfcs/RFC-0005-filesystem-tools.md)
 - [RFC-0006: Approvals, session log and the first interactive run](docs/rfcs/RFC-0006-approvals-and-the-first-run.md)
+- [RFC-0008: The structured Cargo tool](docs/rfcs/RFC-0008-cargo-tool.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed
 in source, documented by a provider, or inferred. Quantitative claims carry a

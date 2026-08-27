@@ -500,6 +500,7 @@ dependencies = [
  "gyr-core",
  "gyr-model",
  "gyr-protocol",
+ "gyr-rust",
  "gyr-tools",
  "serde_json",
  "tokio",
@@ -543,6 +544,18 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gyr-rust"
+version = "0.1.0"
+dependencies = [
+ "gyr-core",
+ "gyr-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

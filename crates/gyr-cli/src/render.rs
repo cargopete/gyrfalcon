@@ -218,6 +218,13 @@ pub fn describe_call(call: &ToolCall) -> String {
             }
         }),
         "apply_patch" => argument_string(&call.arguments, "path"),
+        "cargo" => argument_string(&call.arguments, "command").map(|command| {
+            let package = argument_string(&call.arguments, "package")
+                .map_or_else(String::new, |package| format!(" -p {package}"));
+            let filter = argument_string(&call.arguments, "filter")
+                .map_or_else(String::new, |filter| format!(" {filter}"));
+            format!("{command}{package}{filter}")
+        }),
         _ => None,
     };
     match detail {

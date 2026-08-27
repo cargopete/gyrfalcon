@@ -8,6 +8,8 @@ use futures_util::StreamExt;
 use futures_util::stream;
 use gyr_core::Agent;
 use gyr_core::AgentConfig;
+use gyr_core::ToolRuntime;
+use gyr_core::ToolSet;
 use gyr_core::approval::AllowAll;
 use gyr_core::approval::ApprovalReply;
 use gyr_core::approval::Interactive;
@@ -27,6 +29,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use crate::support::EchoTool;
 use crate::support::FailingSink;
 use crate::support::ScriptedApprover;
 use crate::support::ScriptedSession;
@@ -329,4 +332,88 @@ async fn a_mutating_call_is_classified_as_such() {
     assert_eq!(patch.class, ToolClass::Mutating);
     assert_eq!(patch.subject.as_deref(), Some("src/lib.rs"));
     assert_eq!(json!(patch.class), json!("mutating"));
+}
+
+#[tokio::test]
+async fn a_process_call_is_refused_in_read_only_mode() {
+    let mut agent = agent(vec![
+        tool_turn(tool_call("call-1", "cargo", "unused")),
+        text_turn("very well"),
+    ])
+    .with_policy(ReadOnly);
+
+    let result = agent.run("run the tests").await.unwrap();
+
+    let results = tool_results(&result);
+    assert!(results[0].output.is_error);
+    assert!(
+        results[0].output.content.contains("read-only mode"),
+        "said: {}",
+        results[0].output.content
+    );
+    assert!(agent.tools().executed_names().is_empty());
+}
+
+#[tokio::test]
+async fn a_process_call_still_asks_a_person_in_interactive_mode() {
+    let (approver, asked) = ScriptedApprover::new(vec![ApprovalReply::Once]);
+    let mut agent = agent(vec![
+        tool_turn(tool_call("call-1", "cargo", "unused")),
+        text_turn("done"),
+    ])
+    .with_policy(Interactive::new(approver));
+
+    let result = agent.run("run the tests").await.unwrap();
+
+    assert_eq!(
+        *asked.lock().unwrap(),
+        vec!["cargo\u{1f}cargo check --workspace".to_owned()],
+        "a process call is never auto-allowed"
+    );
+    assert_eq!(
+        decisions(&result),
+        vec![(
+            "cargo\u{1f}cargo check --workspace".to_owned(),
+            ApprovalDecision::allowed(DecisionSource::User)
+        )]
+    );
+}
+
+#[test]
+fn a_tool_set_refuses_two_runtimes_claiming_one_name() {
+    let Err(error) = ToolSet::new(vec![
+        Box::new(EchoTool { name: "build" }),
+        Box::new(EchoTool { name: "build" }),
+    ]) else {
+        panic!("a duplicated tool name must not build a tool set");
+    };
+
+    assert_eq!(error.to_string(), "two tool runtimes both offer \"build\"");
+}
+
+#[tokio::test]
+async fn a_tool_set_dispatches_by_tool_name() {
+    let tools = ToolSet::new(vec![
+        Box::new(EchoTool { name: "first" }),
+        Box::new(EchoTool { name: "second" }),
+    ])
+    .unwrap();
+
+    let names: Vec<String> = tools
+        .definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect();
+    let chosen = tools
+        .execute(&tool_call("call-1", "second", "unused"))
+        .await
+        .unwrap();
+    let unknown = tools
+        .execute(&tool_call("call-2", "third", "unused"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(names, vec!["first".to_owned(), "second".to_owned()]);
+    assert_eq!(chosen.content, "second");
+    assert_eq!(unknown.to_string(), "unknown tool \"third\"");
 }

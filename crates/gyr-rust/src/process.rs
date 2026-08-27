@@ -1,0 +1,143 @@
+//! Running one child process under a wall clock, with capped output.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+
+use gyr_core::ToolError;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
+
+/// A finished, or abandoned, child process.
+#[derive(Debug)]
+pub struct Execution {
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub truncated: bool,
+    pub timed_out: bool,
+}
+
+/// The only environment variables a child is given.
+///
+/// The inherited environment is cleared first, so a build script cannot read
+/// the agent's provider credentials out of it. The child still runs arbitrary
+/// code; this narrows what that code can see, not what it can do.
+fn child_environment() -> BTreeMap<&'static str, String> {
+    let mut environment = BTreeMap::new();
+    for name in ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"] {
+        if let Ok(value) = std::env::var(name) {
+            environment.insert(name, value);
+        }
+    }
+    environment.insert("CARGO_TERM_COLOR", "never".to_owned());
+    environment.insert("TERM", "dumb".to_owned());
+    environment
+}
+
+/// Runs a program to completion, or kills it when the clock or the caller says
+/// so.
+///
+/// Dropping the returned future kills the child, because the command is spawned
+/// with `kill_on_drop`. That is what makes a cancelled agent run leave no
+/// process behind.
+pub async fn run(
+    program: &str,
+    arguments: &[String],
+    directory: &Path,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Execution, ToolError> {
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .env_clear();
+    for (name, value) in child_environment() {
+        command.env(name, value);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| ToolError::new(format!("cannot run {program}: {error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ToolError::new("child process had no stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ToolError::new("child process had no stderr"))?;
+
+    let collected = tokio::time::timeout(timeout, async {
+        // Both pipes are drained concurrently. Reading one to completion first
+        // would deadlock as soon as the other filled its buffer.
+        let (out, err, status) = tokio::join!(
+            read_capped(stdout, limit),
+            read_capped(stderr, limit),
+            child.wait()
+        );
+        Ok::<_, std::io::Error>((out?, err?, status?))
+    })
+    .await;
+
+    match collected {
+        Ok(Ok(((stdout, stdout_truncated), (stderr, stderr_truncated), status))) => Ok(Execution {
+            exit_code: status.code(),
+            stdout,
+            stderr,
+            truncated: stdout_truncated || stderr_truncated,
+            timed_out: false,
+        }),
+        Ok(Err(error)) => Err(ToolError::new(format!(
+            "cannot read output from {program}: {error}"
+        ))),
+        Err(_elapsed) => {
+            // The child is killed when `command` and its handle drop.
+            Ok(Execution {
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                truncated: false,
+                timed_out: true,
+            })
+        }
+    }
+}
+
+/// Reads a pipe, keeping the first `limit` bytes and discarding the rest.
+///
+/// Discarding rather than stopping matters: a reader that simply gave up would
+/// block the child on its next write, and a build that hangs because its output
+/// was too interesting is a poor way to learn that.
+async fn read_capped<R>(mut reader: R, limit: usize) -> std::io::Result<(String, bool)>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut kept: Vec<u8> = Vec::new();
+    // On the heap: two of these on the stack would put sixteen kilobytes into
+    // every future that awaits this, which the linter notices and is right to.
+    let mut buffer = vec![0_u8; 8_192];
+    let mut truncated = false;
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        if kept.len() < limit {
+            let room = limit - kept.len();
+            let take = room.min(read);
+            kept.extend_from_slice(&buffer[..take]);
+            truncated |= take < read;
+        } else {
+            truncated = true;
+        }
+    }
+    Ok((String::from_utf8_lossy(&kept).into_owned(), truncated))
+}

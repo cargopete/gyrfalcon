@@ -149,14 +149,17 @@ pub enum ModelEvent {
 
 /// What a tool call would do, as classified by the runtime that owns the tool.
 ///
-/// Two classes are enough for the filesystem surface. Process execution will
-/// need at least a workspace-local and an external class, and will introduce
-/// them with the tool that requires them.
+/// Classes are added with the tool that needs them rather than in advance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolClass {
+    /// Reads workspace state and changes nothing.
     ReadOnly,
+    /// Changes a workspace file. The subject names which one.
     Mutating,
+    /// Runs code on the host. Its effects are not bounded by the filesystem
+    /// fence, and no policy auto-allows it.
+    Process,
 }
 
 /// A classified tool call, with the narrow subject a session rule may be keyed on.
@@ -180,6 +183,14 @@ impl ToolAction {
     pub fn mutating(subject: impl Into<String>) -> Self {
         Self {
             class: ToolClass::Mutating,
+            subject: Some(subject.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn process(subject: impl Into<String>) -> Self {
+        Self {
+            class: ToolClass::Process,
             subject: Some(subject.into()),
         }
     }

@@ -79,7 +79,7 @@ impl WorkspaceTools {
     }
 
     #[must_use]
-    pub fn definitions() -> Vec<ToolDefinition> {
+    fn tool_definitions() -> Vec<ToolDefinition> {
         vec![
             ToolDefinition {
                 name: "read".into(),
@@ -370,6 +370,10 @@ impl WorkspaceTools {
 }
 
 impl ToolRuntime for WorkspaceTools {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        Self::tool_definitions()
+    }
+
     fn classify(&self, call: &ToolCall) -> Result<ToolAction, ToolError> {
         self.classify_sync(call)
     }

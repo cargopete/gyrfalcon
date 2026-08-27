@@ -1,0 +1,275 @@
+//! The Cargo tool against a real toolchain and a throwaway workspace.
+
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use gyr_core::ToolRuntime;
+use gyr_protocol::ToolCall;
+use gyr_protocol::ToolClass;
+use gyr_protocol::ToolOutput;
+use gyr_rust::CargoLimits;
+use gyr_rust::CargoTool;
+use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
+
+static WORKSPACE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A single-package Cargo project with no dependencies, so a check costs a
+/// fraction of a second and needs no network.
+struct Fixture {
+    path: PathBuf,
+}
+
+impl Fixture {
+    fn new(body: &str) -> Self {
+        let serial = WORKSPACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "gyrfalcon-cargo-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir_all(path.join("src")).unwrap();
+        fs::write(
+            path.join("Cargo.toml"),
+            // An explicit empty workspace table detaches the fixture from any
+            // Cargo workspace that happens to contain the temporary directory.
+            "[workspace]\n\
+             [package]\n\
+             name = \"fixture\"\n\
+             version = \"0.1.0\"\n\
+             edition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(path.join("src/lib.rs"), body).unwrap();
+        Self { path }
+    }
+
+    fn tool(&self) -> CargoTool {
+        CargoTool::new(&self.path, CargoLimits::default()).unwrap()
+    }
+
+    fn tool_with(&self, limits: CargoLimits) -> CargoTool {
+        CargoTool::new(&self.path, limits).unwrap()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn call(arguments: Value) -> ToolCall {
+    ToolCall {
+        id: "call-1".into(),
+        name: "cargo".into(),
+        arguments,
+    }
+}
+
+fn parse(output: &ToolOutput) -> Value {
+    assert!(
+        !output.is_error,
+        "tool reported an error: {}",
+        output.content
+    );
+    serde_json::from_str(&output.content).unwrap()
+}
+
+#[tokio::test]
+async fn a_clean_check_reports_no_errors() {
+    let fixture = Fixture::new("pub fn two() -> u32 { 2 }\n");
+
+    let output = fixture
+        .tool()
+        .execute(&call(json!({"command": "check"})))
+        .await
+        .unwrap();
+    let output = parse(&output);
+
+    assert_eq!(output["exit_code"], 0);
+    assert_eq!(output["counts"]["errors"], 0);
+    assert_eq!(output["timed_out"], false);
+    assert_eq!(output["dropped_diagnostics"], 0);
+    assert!(
+        output["command"]
+            .as_str()
+            .unwrap()
+            .contains("--manifest-path Cargo.toml"),
+        "the manifest must be explicit: {}",
+        output["command"]
+    );
+}
+
+#[tokio::test]
+async fn a_type_error_arrives_parsed_with_its_code_and_location() {
+    let fixture = Fixture::new("pub fn two() -> u32 {\n    \"two\"\n}\n");
+
+    let output = fixture
+        .tool()
+        .execute(&call(json!({"command": "check"})))
+        .await
+        .unwrap();
+    let output = parse(&output);
+
+    assert_ne!(output["exit_code"], 0);
+    assert_eq!(output["counts"]["errors"], 1);
+    let diagnostic = &output["diagnostics"][0];
+    assert_eq!(diagnostic["level"], "error");
+    assert_eq!(diagnostic["code"], "E0308");
+    assert_eq!(diagnostic["file"], "src/lib.rs");
+    assert_eq!(diagnostic["line"], 2);
+    assert!(
+        diagnostic["rendered"]
+            .as_str()
+            .unwrap()
+            .contains("mismatched types")
+    );
+}
+
+#[tokio::test]
+async fn metadata_is_summarised_rather_than_returned_whole() {
+    let fixture = Fixture::new("pub fn two() -> u32 { 2 }\n");
+
+    let output = fixture
+        .tool()
+        .execute(&call(json!({"command": "metadata"})))
+        .await
+        .unwrap();
+    let output = parse(&output);
+
+    let packages = output["packages"].as_array().unwrap();
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0]["name"], "fixture");
+    assert_eq!(packages[0]["version"], "0.1.0");
+    assert_eq!(packages[0]["edition"], "2021");
+    assert_eq!(packages[0]["manifest_path"], "Cargo.toml");
+    assert!(output.get("output").unwrap().as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_wall_clock_kills_a_long_run_and_says_so() {
+    let fixture = Fixture::new(
+        "#[test]\nfn sleeps() { std::thread::sleep(std::time::Duration::from_secs(120)); }\n",
+    );
+    let limits = CargoLimits {
+        timeout: Duration::from_secs(2),
+        ..CargoLimits::default()
+    };
+
+    let output = fixture
+        .tool_with(limits)
+        .execute(&call(json!({"command": "test"})))
+        .await
+        .unwrap();
+    let output = parse(&output);
+
+    // The child is killed by dropping the future, which is the same path a
+    // cancelled agent run takes.
+    assert_eq!(output["timed_out"], true);
+    assert_eq!(output["exit_code"], Value::Null);
+    assert!(
+        output["output"]
+            .as_str()
+            .unwrap()
+            .contains("killed after 2"),
+        "said: {}",
+        output["output"]
+    );
+}
+
+#[test]
+fn every_cargo_call_is_classified_as_a_process() {
+    let fixture = Fixture::new("pub fn two() -> u32 { 2 }\n");
+    let tool = fixture.tool();
+
+    for command in ["metadata", "check", "clippy", "test", "fmt"] {
+        let action = tool.classify(&call(json!({"command": command}))).unwrap();
+
+        assert_eq!(
+            action.class,
+            ToolClass::Process,
+            "{command} must never be classified as read-only"
+        );
+        let subject = action.subject.unwrap();
+        assert!(
+            subject.starts_with(&format!("cargo {command}")),
+            "{subject}"
+        );
+        assert!(subject.contains("--manifest-path Cargo.toml"), "{subject}");
+    }
+}
+
+#[test]
+fn a_session_rule_for_one_command_does_not_cover_another() {
+    let fixture = Fixture::new("pub fn two() -> u32 { 2 }\n");
+    let tool = fixture.tool();
+
+    let check = tool.classify(&call(json!({"command": "check"}))).unwrap();
+    let test = tool.classify(&call(json!({"command": "test"}))).unwrap();
+    let scoped = tool
+        .classify(&call(json!({"command": "check", "package": "fixture"})))
+        .unwrap();
+
+    assert_ne!(check.rule_key("cargo"), test.rule_key("cargo"));
+    assert_ne!(check.rule_key("cargo"), scoped.rule_key("cargo"));
+}
+
+#[test]
+fn an_argument_that_could_become_a_flag_is_rejected() {
+    let fixture = Fixture::new("pub fn two() -> u32 { 2 }\n");
+    let tool = fixture.tool();
+
+    for package in ["--offline", "-p", "fixture --offline", "fixture;ls", ""] {
+        let error = tool
+            .classify(&call(json!({"command": "check", "package": package})))
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("package"),
+            "{package:?} was refused for the wrong reason: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_filter_outside_the_test_command_is_rejected() {
+    let fixture = Fixture::new("pub fn two() -> u32 { 2 }\n");
+
+    let error = fixture
+        .tool()
+        .classify(&call(json!({"command": "check", "filter": "parses"})))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("only to the test command"));
+}
+
+#[test]
+fn an_unknown_field_is_rejected_rather_than_ignored() {
+    let fixture = Fixture::new("pub fn two() -> u32 { 2 }\n");
+
+    let error = fixture
+        .tool()
+        .classify(&call(json!({"command": "check", "args": ["--offline"]})))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("invalid cargo arguments"));
+}
+
+#[test]
+fn a_directory_without_a_manifest_is_refused_at_construction() {
+    let serial = WORKSPACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "gyrfalcon-cargo-bare-{}-{serial}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path).unwrap();
+
+    let error = CargoTool::new(&path, CargoLimits::default()).unwrap_err();
+
+    fs::remove_dir_all(&path).unwrap();
+    assert!(error.to_string().contains("no Cargo.toml"));
+}

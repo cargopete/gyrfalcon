@@ -193,11 +193,12 @@ chosen that retention mode.
    with the session log, cancellation and a one-shot `gyr run`. **The sandbox is
    not**, so the current boundary is a filesystem fence and a policy, not an
    operating-system boundary.
-7. Process execution and the structured `cargo` tool, which the sandbox and the
-   diagnostic gate both depend on.
-8. Rust diagnostic gate and representative eval corpus.
-9. Interactive terminal interface.
-10. ChatGPT OAuth, after the transport is independently sound.
+7. The structured `cargo` tool. **Done** in RFC-0008. General `exec` was
+   deliberately deferred behind the sandbox rather than shipped beside it.
+8. OS sandbox enforcement, and `exec` once it exists.
+9. Rust diagnostic gate and representative eval corpus.
+10. Interactive terminal interface.
+11. ChatGPT OAuth, after the transport is independently sound.
 
 Each stage must produce a working vertical slice. A directory full of interfaces
 whose behaviour is promised for later is not progress, although it can look

@@ -19,6 +19,8 @@ use clap::Parser;
 use clap::Subcommand;
 use gyr_core::Agent;
 use gyr_core::AgentConfig;
+use gyr_core::ToolRuntime;
+use gyr_core::ToolSet;
 use gyr_core::approval::AllowAll;
 use gyr_core::approval::ApprovalPolicy;
 use gyr_core::approval::Interactive;
@@ -30,6 +32,9 @@ use gyr_core::session::SessionId;
 use gyr_core::session::SessionMeta;
 use gyr_model::builtin_profiles;
 use gyr_protocol::StopReason;
+use gyr_protocol::ToolDefinition;
+use gyr_rust::CargoLimits;
+use gyr_rust::CargoTool;
 use gyr_tools::ToolLimits;
 use gyr_tools::WorkspaceTools;
 use tokio_util::sync::CancellationToken;
@@ -153,7 +158,8 @@ fn list_models(json: bool) -> Result<()> {
 fn print_prompt(args: &PromptArgs) -> Result<()> {
     let profile = config::resolve_profile(args.model.as_deref())?;
     let workspace = config::resolve_workspace(args.workspace.as_deref())?;
-    let context = prompt_context(&workspace, ApprovalMode::Interactive);
+    let tools = tool_set(&workspace)?;
+    let context = prompt_context(&workspace, ApprovalMode::Interactive, &tools.definitions());
     let prompt = system_prompt(&context);
     eprintln!(
         "model {} · {} bytes of system prompt",
@@ -164,12 +170,35 @@ fn print_prompt(args: &PromptArgs) -> Result<()> {
     Ok(())
 }
 
-fn prompt_context(workspace: &std::path::Path, mode: ApprovalMode) -> PromptContext {
+/// The tools one session offers.
+///
+/// The Cargo tool is present only where a manifest is, so a workspace that is
+/// not a Cargo project simply has fewer tools rather than one that fails on
+/// every call.
+fn tool_set(workspace: &std::path::Path) -> Result<ToolSet> {
+    let mut runtimes: Vec<Box<dyn ToolRuntime>> = vec![Box::new(
+        WorkspaceTools::new(workspace, ToolLimits::default())
+            .map_err(|error| anyhow::anyhow!("{error}"))?,
+    )];
+    if workspace.join("Cargo.toml").is_file() {
+        runtimes.push(Box::new(
+            CargoTool::new(workspace, CargoLimits::default())
+                .map_err(|error| anyhow::anyhow!("{error}"))?,
+        ));
+    }
+    ToolSet::new(runtimes).map_err(|error| anyhow::anyhow!("{error}"))
+}
+
+fn prompt_context(
+    workspace: &std::path::Path,
+    mode: ApprovalMode,
+    definitions: &[ToolDefinition],
+) -> PromptContext {
     PromptContext {
         workspace_root: workspace.display().to_string(),
-        tools: WorkspaceTools::definitions()
-            .into_iter()
-            .map(|definition| definition.name)
+        tools: definitions
+            .iter()
+            .map(|definition| definition.name.clone())
             .collect(),
         approval_mode: mode.label().to_owned(),
     }
@@ -181,14 +210,10 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     let settings = settings(&args, &session_id)?;
     let request = request_text(args.prompt)?;
 
-    let tools = WorkspaceTools::new(&settings.workspace, ToolLimits::default())
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    let context = prompt_context(&settings.workspace, settings.mode);
-    let session = config::build_session(
-        &settings.profile,
-        system_prompt(&context),
-        WorkspaceTools::definitions(),
-    )?;
+    let tools = tool_set(&settings.workspace)?;
+    let definitions = tools.definitions();
+    let context = prompt_context(&settings.workspace, settings.mode, &definitions);
+    let session = config::build_session(&settings.profile, system_prompt(&context), definitions)?;
 
     let log = JsonlSessionLog::create(
         &settings.log_path,

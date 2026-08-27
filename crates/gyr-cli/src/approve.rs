@@ -15,6 +15,7 @@ use gyr_core::approval::Approver;
 use gyr_core::approval::ReplyFuture;
 use gyr_protocol::ToolAction;
 use gyr_protocol::ToolCall;
+use gyr_protocol::ToolClass;
 
 use crate::render::describe_call;
 use crate::style;
@@ -30,8 +31,9 @@ impl Approver for TerminalApprover {
         let summary = describe_call(call);
         let subject = action.subject.clone().unwrap_or_else(|| call.name.clone());
         let tool = call.name.clone();
+        let class = action.class;
         Box::pin(async move {
-            let prompt = move || ask_on_terminal(&summary, &tool, &subject);
+            let prompt = move || ask_on_terminal(&summary, &tool, &subject, class);
             match tokio::task::spawn_blocking(prompt).await {
                 Ok(reply) => reply,
                 Err(error) => {
@@ -46,20 +48,32 @@ impl Approver for TerminalApprover {
 ///
 /// A closed or non-interactive standard input reaches the same place: refusal.
 /// An approval that a person did not give is not an approval.
-fn ask_on_terminal(summary: &str, tool: &str, subject: &str) -> ApprovalReply {
+fn ask_on_terminal(summary: &str, tool: &str, subject: &str, class: ToolClass) -> ApprovalReply {
     let mut err = stderr().lock();
     let header = style::paint(&[AMBER, BOLD], "  approval");
     let detail = style::paint(&[DIM], &format!("      rule scope: {tool} on {subject}"));
+    let (always, caveat) = match class {
+        ToolClass::Process => (
+            "always for this exact command",
+            // Worth saying every time. A rule approves an argument vector, and
+            // the code that vector compiles and runs can change afterwards.
+            Some("      this runs code on your machine, unsandboxed, and what it runs may change"),
+        ),
+        _ => ("always for this file", None),
+    };
     let question = style::paint(
         &[DIM],
-        "      [y] once   [a] always for this file   [n] refuse: ",
+        &format!("      [y] once   [a] {always}   [n] refuse: "),
     );
-    if writeln!(err, "\n{header}  {summary}")
+    let written = writeln!(err, "\n{header}  {summary}")
         .and_then(|()| writeln!(err, "{detail}"))
+        .and_then(|()| match caveat {
+            Some(caveat) => writeln!(err, "{}", style::paint(&[DIM], caveat)),
+            None => Ok(()),
+        })
         .and_then(|()| write!(err, "{question}"))
-        .and_then(|()| err.flush())
-        .is_err()
-    {
+        .and_then(|()| err.flush());
+    if written.is_err() {
         return ApprovalReply::Reject(Some("could not present the approval prompt".into()));
     }
 

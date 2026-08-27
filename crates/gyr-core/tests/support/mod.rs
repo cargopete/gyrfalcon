@@ -23,6 +23,7 @@ use gyr_protocol::ModelProfile;
 use gyr_protocol::StopReason;
 use gyr_protocol::ToolAction;
 use gyr_protocol::ToolCall;
+use gyr_protocol::ToolDefinition;
 use gyr_protocol::ToolOutput;
 use gyr_protocol::TurnInput;
 use serde_json::json;
@@ -89,9 +90,21 @@ impl ScriptedTools {
 }
 
 impl ToolRuntime for ScriptedTools {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        ["read", "search", "apply_patch", "cargo"]
+            .into_iter()
+            .map(|name| ToolDefinition {
+                name: name.into(),
+                description: format!("scripted {name}"),
+                input_schema: json!({"type": "object"}),
+            })
+            .collect()
+    }
+
     fn classify(&self, call: &ToolCall) -> Result<ToolAction, ToolError> {
         match call.name.as_str() {
             "read" | "search" => Ok(ToolAction::read_only()),
+            "cargo" => Ok(ToolAction::process("cargo check --workspace")),
             "apply_patch" => {
                 let path = call
                     .arguments
@@ -188,4 +201,27 @@ pub fn text_turn(text: &str) -> Turn {
             reason: StopReason::EndTurn,
         },
     ])
+}
+
+/// A second runtime, for proving that a [`ToolSet`] dispatches by name.
+pub struct EchoTool {
+    pub name: &'static str,
+}
+
+impl ToolRuntime for EchoTool {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        vec![ToolDefinition {
+            name: self.name.into(),
+            description: "echoes its own name".into(),
+            input_schema: json!({"type": "object"}),
+        }]
+    }
+
+    fn classify(&self, _call: &ToolCall) -> Result<ToolAction, ToolError> {
+        Ok(ToolAction::read_only())
+    }
+
+    fn execute(&self, _call: &ToolCall) -> ToolFuture<'_> {
+        Box::pin(async move { Ok(ToolOutput::success(self.name)) })
+    }
 }

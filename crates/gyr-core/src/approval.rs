@@ -57,10 +57,10 @@ impl ApprovalPolicy for AllowAll {
     }
 }
 
-/// Allows read-only calls and refuses every mutation.
+/// Allows read-only calls and refuses everything else.
 ///
 /// This is the default policy, so an agent constructed without an explicit
-/// choice cannot write to the workspace.
+/// choice can neither write to the workspace nor run anything on the host.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ReadOnly;
 
@@ -68,13 +68,15 @@ impl ApprovalPolicy for ReadOnly {
     fn decide(&self, _call: &ToolCall, action: &ToolAction) -> DecisionFuture<'_> {
         let decision = match action.class {
             ToolClass::ReadOnly => ApprovalDecision::allowed(DecisionSource::Policy),
-            ToolClass::Mutating => ApprovalDecision::denied("this session runs in read-only mode"),
+            ToolClass::Mutating | ToolClass::Process => {
+                ApprovalDecision::denied("this session runs in read-only mode")
+            }
         };
         Box::pin(async move { decision })
     }
 }
 
-/// Allows read-only calls, asks a person about mutations, and remembers the
+/// Allows read-only calls, asks a person about anything else, and remembers the
 /// narrow rules that person granted.
 pub struct Interactive<A> {
     approver: A,

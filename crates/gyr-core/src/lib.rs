@@ -9,6 +9,7 @@ pub mod approval;
 pub mod prompt;
 pub mod session;
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::num::NonZeroU32;
@@ -23,6 +24,7 @@ use gyr_protocol::ModelEvent;
 use gyr_protocol::StopReason;
 use gyr_protocol::ToolAction;
 use gyr_protocol::ToolCall;
+use gyr_protocol::ToolDefinition;
 use gyr_protocol::ToolOutput;
 use gyr_protocol::ToolResult;
 use gyr_protocol::TurnInput;
@@ -44,6 +46,13 @@ pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput, ToolErr
 /// way in both methods, or an approval granted for one target could be spent on
 /// another.
 pub trait ToolRuntime: Send + Sync {
+    /// The tools this runtime offers, as the provider will be told about them.
+    ///
+    /// A runtime describes its own surface so a [`ToolSet`] can refuse two
+    /// runtimes claiming one name at construction, rather than dispatching to
+    /// whichever it happened to check first for the rest of the session.
+    fn definitions(&self) -> Vec<ToolDefinition>;
+
     /// Describes what a call would do, without doing it.
     ///
     /// # Errors
@@ -53,6 +62,65 @@ pub trait ToolRuntime: Send + Sync {
     fn classify(&self, call: &ToolCall) -> Result<ToolAction, ToolError>;
 
     fn execute(&self, call: &ToolCall) -> ToolFuture<'_>;
+}
+
+/// Several tool runtimes behind one, dispatching by tool name.
+pub struct ToolSet {
+    runtimes: Vec<Box<dyn ToolRuntime>>,
+    /// Tool name to the index of the runtime that owns it.
+    owners: HashMap<String, usize>,
+}
+
+impl ToolSet {
+    /// Combines runtimes into one surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError`] when two runtimes claim the same tool name. A
+    /// silent winner there would make every later approval decision describe a
+    /// different tool from the one that ran.
+    pub fn new(runtimes: Vec<Box<dyn ToolRuntime>>) -> Result<Self, ToolError> {
+        let mut owners = HashMap::new();
+        for (index, runtime) in runtimes.iter().enumerate() {
+            for definition in runtime.definitions() {
+                if owners.insert(definition.name.clone(), index).is_some() {
+                    return Err(ToolError::new(format!(
+                        "two tool runtimes both offer {:?}",
+                        definition.name
+                    )));
+                }
+            }
+        }
+        Ok(Self { runtimes, owners })
+    }
+
+    fn owner(&self, call: &ToolCall) -> Result<&dyn ToolRuntime, ToolError> {
+        self.owners
+            .get(&call.name)
+            .and_then(|index| self.runtimes.get(*index))
+            .map(AsRef::as_ref)
+            .ok_or_else(|| ToolError::new(format!("unknown tool {:?}", call.name)))
+    }
+}
+
+impl ToolRuntime for ToolSet {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        self.runtimes
+            .iter()
+            .flat_map(|runtime| runtime.definitions())
+            .collect()
+    }
+
+    fn classify(&self, call: &ToolCall) -> Result<ToolAction, ToolError> {
+        self.owner(call)?.classify(call)
+    }
+
+    fn execute(&self, call: &ToolCall) -> ToolFuture<'_> {
+        match self.owner(call) {
+            Ok(runtime) => runtime.execute(call),
+            Err(error) => Box::pin(async move { Err(error) }),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -245,10 +313,11 @@ where
 
                     let mut results = Vec::with_capacity(calls.len());
                     for call in calls {
-                        if cancel.is_cancelled() {
+                        let Some(result) =
+                            self.settle(model_turn, call, &mut events, cancel).await?
+                        else {
                             return Ok(cancelled(events, text, model_turn));
-                        }
-                        let result = self.settle(model_turn, call, &mut events).await?;
+                        };
                         results.push(result);
                     }
                     input = TurnInput::ToolResults { results };
@@ -286,27 +355,42 @@ where
     /// so the provider always receives a result for every call ID it issued. A
     /// refusal is an ordinary observation carrying that ID, not a control-flow
     /// escape.
+    ///
+    /// Returns `None` when the run was cancelled, in which case no result is
+    /// invented for the call that was interrupted.
     async fn settle(
         &mut self,
         model_turn: u32,
         call: ToolCall,
         events: &mut Vec<AgentEvent>,
-    ) -> Result<ToolResult, AgentError> {
+        cancel: &CancellationToken,
+    ) -> Result<Option<ToolResult>, AgentError> {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
+
         let action = match self.tools.classify(&call) {
             Ok(action) => action,
             Err(error) => {
                 // Not classified, so not decided and not executed. The log shows
                 // a call that failed before any policy could apply to it.
-                return self.finish_call(
-                    model_turn,
-                    call.id,
-                    ToolOutput::error(error.to_string()),
-                    events,
-                );
+                return self
+                    .finish_call(
+                        model_turn,
+                        call.id,
+                        ToolOutput::error(error.to_string()),
+                        events,
+                    )
+                    .map(Some);
             }
         };
 
-        let decision = self.policy.decide(&call, &action).await;
+        let Some(decision) = cancel
+            .run_until_cancelled(self.policy.decide(&call, &action))
+            .await
+        else {
+            return Ok(None);
+        };
         self.emit(
             AgentEvent::ToolDecided {
                 model_turn,
@@ -319,12 +403,14 @@ where
         )?;
 
         if let ApprovalDecision::Denied { reason } = decision {
-            return self.finish_call(
-                model_turn,
-                call.id,
-                ToolOutput::error(format!("refused by approval policy: {reason}")),
-                events,
-            );
+            return self
+                .finish_call(
+                    model_turn,
+                    call.id,
+                    ToolOutput::error(format!("refused by approval policy: {reason}")),
+                    events,
+                )
+                .map(Some);
         }
 
         self.emit(
@@ -334,12 +420,15 @@ where
             },
             events,
         )?;
-        let output = self
-            .tools
-            .execute(&call)
-            .await
-            .unwrap_or_else(|error| ToolOutput::error(error.to_string()));
+        // Dropping the execution future cancels the tool. A tool that spawns a
+        // child process is responsible for killing it on drop; the core cannot
+        // do that on its behalf.
+        let Some(output) = cancel.run_until_cancelled(self.tools.execute(&call)).await else {
+            return Ok(None);
+        };
+        let output = output.unwrap_or_else(|error| ToolOutput::error(error.to_string()));
         self.finish_call(model_turn, call.id, output, events)
+            .map(Some)
     }
 
     fn finish_call(
