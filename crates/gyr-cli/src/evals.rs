@@ -39,6 +39,9 @@ pub struct EvalArgs {
     /// Containment for the processes a case starts.
     #[arg(long, value_enum, default_value_t = SandboxMode::Workspace)]
     pub sandbox: SandboxMode,
+    /// Withhold a tool from every case, for ablation. Repeatable.
+    #[arg(long = "without")]
+    pub without: Vec<String>,
     /// Emit the whole record, metrics included, as JSON.
     #[arg(long)]
     pub json: bool,
@@ -76,9 +79,14 @@ pub async fn run(args: EvalArgs) -> Result<ExitCode> {
             style::paint(
                 FAINT,
                 &format!(
-                    "{} · {} case(s) · scratch {}",
+                    "{} · {} case(s){} · scratch {}",
                     profile.display_name,
                     cases.len(),
+                    if args.without.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · without {}", args.without.join(", "))
+                    },
                     scratch.display()
                 )
             )
@@ -100,7 +108,7 @@ pub async fn run(args: EvalArgs) -> Result<ExitCode> {
                 .map(|session| session as Box<dyn ModelSession>)
         };
 
-        let outcome = run_case(case, &scratch, Arc::clone(&sandbox), &build).await?;
+        let outcome = run_case(case, &scratch, Arc::clone(&sandbox), &args.without, &build).await?;
         if !args.json {
             print_case(&outcome);
         }

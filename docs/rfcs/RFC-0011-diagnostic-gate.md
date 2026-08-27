@@ -298,12 +298,50 @@ from thinking: a case whose cascade cannot be read ahead of time, and a tool
 description that says to call `start` before the first edit.
 
 **What this does not establish.** `cargo check` would have reported the same
-three errors. What the gate added was the comparison — "you introduced three
-against a clean baseline" rather than a list of three — and whether that framing
-changes what a model does next is untested and would need a case run both ways.
-So the premise holds: batches do go red, and a model does act on being told. The
-gate's marginal value over a plain `cargo check` is the open question, and it is
-a much better specified one than section 12.1 could pose.
+three errors. Whether the gate's framing changes what a model does next needed
+the case run both ways, which is section 12.1.4.
+
+### 12.1.4 The ablation, and a null result
+
+**Measured on 2026-08-27, two runs each way.** RFC-0012's harness gained a
+`--without` flag, which hides a tool as completely as if it had never been
+built. `add-a-field` was then run twice with the gate hidden.
+
+The prediction, written down before the runs: `cargo check` would fill the same
+slot and reach the same result in a similar number of turns, making the gate's
+marginal value nil for this case.
+
+| | with gate | without gate |
+|---|---|---|
+| turns | 8, 10 | 9, 9 |
+| input tokens | 37,053 · 46,369 | 43,403 · 43,263 |
+| result | correct, both | correct, both |
+
+```text
+with:     search read [gate start] patch [gate check -> regressing] read read patch patch [gate check -> green]
+without:  search read              patch [cargo check]              read read patch patch [cargo check]
+```
+
+The prediction held exactly. `cargo check` occupies the slot `gate check`
+occupied, the same three patches follow the same two reads, and every difference
+is inside the ±1 turn and 6.6% token noise floor measured in section 12.1.1.
+
+**So on a batch that converges, the gate is `cargo check` with better wording.**
+That is a null result and it is the honest reading of it.
+
+What the gate has that `cargo check` does not is the baseline comparison and the
+consecutive-stall counter. Neither mattered here, because the model converged in
+one correction. The place the gate could still earn its cost is a batch that
+does **not** converge, where `stalled` and `exhausted` would stop a model
+repeating itself. That has never been observed, and constructing it deliberately
+means finding a task a competent model fails at repeatedly, which is a harder
+case to write than any so far.
+
+Until then the position is: the gate is built, correct, tested, used as designed,
+and has not been shown to change an outcome. It occupies a tool slot and prompt
+tokens for something `cargo` already does. It stays because the stall detection
+is the part that was never about verification, and that part is untested rather
+than disproven.
 
 ### 12.2 A bug the same run found
 

@@ -1,11 +1,14 @@
 //! Running one case and deciding whether it passed.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use gyr_core::Agent;
 use gyr_core::AgentConfig;
+use gyr_core::ToolError;
+use gyr_core::ToolFuture;
 use gyr_core::ToolRuntime;
 use gyr_core::ToolSet;
 use gyr_core::approval::AllowAll;
@@ -17,6 +20,8 @@ use gyr_core::session::SessionMeta;
 use gyr_exec::ExecLimits;
 use gyr_exec::ExecTool;
 use gyr_model::ModelSession;
+use gyr_protocol::ToolAction;
+use gyr_protocol::ToolCall;
 use gyr_protocol::ToolDefinition;
 use gyr_rust::CargoLimits;
 use gyr_rust::CargoTool;
@@ -45,6 +50,46 @@ pub struct Outcome {
     pub metrics: Metrics,
     pub duration_ms: u128,
     pub log_path: String,
+    /// Tools withheld from this run, so a comparison against another run cannot
+    /// mistake an ablation for a behaviour change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub without: Vec<String>,
+}
+
+/// A tool set with some tools hidden, for ablation.
+///
+/// A hidden tool behaves exactly as one that was never built: it is absent from
+/// the definitions the model is given, and naming it is an unknown-tool error.
+/// Anything less would be measuring a tool that is present but discouraged,
+/// which is a different experiment.
+struct Without {
+    inner: ToolSet,
+    hidden: HashSet<String>,
+}
+
+impl ToolRuntime for Without {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        self.inner
+            .definitions()
+            .into_iter()
+            .filter(|definition| !self.hidden.contains(&definition.name))
+            .collect()
+    }
+
+    fn classify(&self, call: &ToolCall) -> Result<ToolAction, ToolError> {
+        if self.hidden.contains(&call.name) {
+            return Err(ToolError::new(format!("unknown tool {:?}", call.name)));
+        }
+        self.inner.classify(call)
+    }
+
+    fn execute(&self, call: &ToolCall) -> ToolFuture<'_> {
+        if self.hidden.contains(&call.name) {
+            let name = call.name.clone();
+            return Box::pin(async move { Err(ToolError::new(format!("unknown tool {name:?}"))) });
+        }
+        self.inner.execute(call)
+    }
 }
 
 /// Builds the provider session for one case.
@@ -64,12 +109,16 @@ pub async fn run_case(
     case: &Case,
     scratch: &Path,
     sandbox: Arc<dyn Sandbox>,
+    without: &[String],
     build_session: BuildSession<'_>,
 ) -> Result<Outcome, EvalError> {
     let workspace = case.materialise(scratch)?;
     let before = fingerprint_tree(&workspace)?;
 
-    let tools = build_tools(&workspace, Arc::clone(&sandbox))?;
+    let tools = Without {
+        inner: build_tools(&workspace, Arc::clone(&sandbox))?,
+        hidden: without.iter().cloned().collect(),
+    };
     let definitions = tools.definitions();
     let context = PromptContext {
         workspace_root: workspace.display().to_string(),
@@ -142,6 +191,7 @@ pub async fn run_case(
         metrics,
         duration_ms,
         log_path: log_path.display().to_string(),
+        without: without.to_vec(),
     })
 }
 

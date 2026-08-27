@@ -128,9 +128,16 @@ The lesson was about writing cases rather than about the gate: difficulty is not
 the variable, predictability is. The harder-looking case that came before it was
 dispatched in one pass because its whole cascade was visible by reading.
 
-What remains open is narrower and better posed. `cargo check` would have
-reported the same three errors; what the gate added was the comparison rather
-than the list. Whether that framing changes what a model does next is untested.
+Running the same case twice with the gate withheld settled the rest, and settled
+it against the gate. `cargo check` fills exactly the slot `gate check` occupied,
+the same patches follow the same reads, and every difference is inside the noise
+floor. On a batch that converges, the gate is `cargo check` with better wording.
+
+That is a null result and it is written down as one. What the gate has that
+`cargo` does not is the baseline comparison and the consecutive-stall counter,
+and the place it could still earn its cost is a batch that does not converge —
+which has never been observed, and which means finding a task a competent model
+fails at repeatedly. RFC-0011 section 12.1.4 has the numbers.
 
 Two identical runs also gave the corpus its first noise floor: gate usage
 identical, ±1 turn per case, 6.6% in tokens. Enough to read a tool histogram

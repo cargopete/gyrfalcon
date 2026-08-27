@@ -343,10 +343,38 @@ replaces it with a sharper question the corpus can also answer. That is the
 first time a case has been written to settle an internal argument and has
 settled it.
 
+### 9.8 Ablation, and writing the prediction down first
+
+The harness gained `--without <tool>`, which hides a tool as completely as if it
+had never been built: absent from the definitions, and an unknown-tool error if
+named. Anything less would measure a tool that is present but discouraged, which
+is a different experiment.
+
+`add-a-field` was then run twice with the gate hidden, against the two runs with
+it. The prediction was written into the terminal before the first run rather
+than after the last, which is the only reason the result can be read as evidence
+rather than as a story. It held exactly, and RFC-0011 section 12.1.4 has the
+table: `cargo check` fills the gate's slot, and every difference is inside the
+noise floor.
+
+Two things this section is really recording.
+
+**A null result is a result, and this one costs something.** The gate is
+correct, used as designed, and has not been shown to change an outcome. Writing
+that down is the whole reason the corpus exists; a repository that only ever
+found its own designs vindicated would not be measuring anything.
+
+**Ablation is the cheapest lever the harness has.** Twenty pence answered a
+question that three RFC sections had been arguing about, and it works for any
+tool. The obvious next uses are `search` and `list`, both of which have been
+assumed useful and neither of which has been withheld to find out.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is
   tempting and is prescribing method by the back door.
+- What `--without search` and `--without list` do to the corpus. Both tools are
+  assumed useful and neither has been withheld to find out.
 - Whether a case needs a per-case timeout distinct from its turn limit, since a
   model can spend a great deal of wall time inside one turn.
 - How many runs of a live case are needed before a number means anything. First
