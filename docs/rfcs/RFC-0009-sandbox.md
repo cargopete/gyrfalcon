@@ -185,6 +185,18 @@ unit tests without them would be a green light for the wrong reason.
 1. CI on both platforms, running what already exists, plus a step that reports
    the runner's kernel version and LSM list. This lands before any sandbox code
    and answers whether the floor above is reachable in CI at all.
+
+   **Answered, 2026-08-27.** The `ubuntu-latest` runner reports kernel
+   `6.17.0-1022-azure`, `landlock` in `lockdown,capability,landlock,yama,
+   apparmor,ima,evm`, and **Landlock ABI 7** against a floor of 4. The kernel
+   floor in section 5.1 is reachable on a hosted runner with no hardware and no
+   configuration.
+
+   The same run also caught a genuine cross-platform defect on its first Linux
+   build: a test helper gated to macOS by its callers but not by its own
+   definition, which is dead code and therefore an error under `-D warnings`
+   anywhere the sandbox is unimplemented. That is CI earning its keep before it
+   has been asked to do the thing it was added for.
 2. `gyr-confine`, with the two escape tests gated to Linux.
 3. `Seatbelt` and the new implementation behind the same `detect`, with the
    kernel-floor refusal message naming 6.7.

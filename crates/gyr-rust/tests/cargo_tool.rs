@@ -60,6 +60,9 @@ impl Fixture {
         CargoTool::new(&self.path, limits, sandbox).unwrap()
     }
 
+    // Gated with its callers. Left ungated it is dead code everywhere the
+    // sandbox is unimplemented, which is what CI caught on its first Linux run.
+    #[cfg(target_os = "macos")]
     fn sandboxed(&self) -> CargoTool {
         let sandbox = gyr_sandbox::detect(&self.path).expect("a sandbox on this platform");
         self.tool_with(CargoLimits::default(), Arc::from(sandbox))
