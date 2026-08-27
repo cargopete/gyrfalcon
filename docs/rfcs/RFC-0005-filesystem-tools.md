@@ -155,6 +155,28 @@ lengths and no `target/`, from a `depth: 3` call on `.`. That is the argument fo
 the ignore-aware walk in one line: `exec ls -R` would have returned the build
 directory and cost more context than it returned.
 
+### 6.1 What the listing hides, and how to ask
+
+**Measured on 2026-08-27.** RFC-0012's ablation runs caught the model calling
+`exec find . -maxdepth 3 -name .gyr` in a run where `list` was available and had
+already been used.
+
+That is not the model preferring a shell. `list` walks with the search rules, so
+it cannot show `.gyr`, `target/`, `.gitignore` or anything else hidden or
+ignored, and there was no way to ask it to. The property that keeps a listing
+from being mostly build output also makes it blind, and a model that wants to
+know about those paths has no tool but `exec`.
+
+`list` therefore takes `all`, which turns the ignore filters off, and reports
+the flag in its output so an absence in an ordinary listing reads as "not shown"
+rather than "not there".
+
+**This was built on one observation, where RFC-0012 declined to build `list`
+itself on one.** The standard differs because the questions differ. "Does a
+model want this capability" is behavioural and needs evidence. "Can `list`
+express this" is structural, is answered by reading the code, and the answer was
+no.
+
 ## 7. Verification and remaining work
 
 Fifteen deterministic temporary-workspace tests cover bounded reading, hashing,

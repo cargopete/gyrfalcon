@@ -107,14 +107,19 @@ impl WorkspaceTools {
             },
             ToolDefinition {
                 name: "list".into(),
-                description: "List the files and directories in the workspace, respecting ignore \
-                              files. Use this to find out what is there before reading anything."
+                description: "List the files and directories in the workspace. Ignored and \
+                              hidden entries are left out unless you ask for them with all, \
+                              which is how to see build output, dotfiles and .gitignore."
                     .into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "path": {"type": "string"},
-                        "depth": {"type": "integer", "minimum": 1}
+                        "depth": {"type": "integer", "minimum": 1},
+                        "all": {
+                            "type": "boolean",
+                            "description": "Include ignored and hidden entries."
+                        }
                     },
                     "additionalProperties": false
                 }),
@@ -317,6 +322,14 @@ impl WorkspaceTools {
             .parents(false)
             .require_git(false)
             .sort_by_file_path(std::cmp::Ord::cmp);
+        if arguments.all {
+            builder
+                .hidden(false)
+                .ignore(false)
+                .git_ignore(false)
+                .git_exclude(false)
+                .git_global(false);
+        }
         if let Some(depth) = arguments.depth {
             builder.max_depth(Some(depth));
         }
@@ -362,6 +375,7 @@ impl WorkspaceTools {
 
         json_output(&ListOutput {
             path: relative.to_owned(),
+            all: arguments.all,
             entries,
             total_entries,
             truncated,
@@ -555,6 +569,14 @@ struct SearchMatch {
 struct ListArguments {
     path: Option<String>,
     depth: Option<usize>,
+    /// Include ignored and hidden entries.
+    ///
+    /// Added because an eval run caught the model reaching for
+    /// `exec find . -name .gyr`: the ignore-aware walk that keeps a listing from
+    /// being mostly build output also makes it blind, and there was no way to
+    /// ask. RFC-0005 section 6.1.
+    #[serde(default)]
+    all: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -568,6 +590,9 @@ struct ListEntry {
 #[derive(Debug, Serialize)]
 struct ListOutput {
     path: String,
+    /// Whether ignored and hidden entries were included, so an absence in this
+    /// listing can be read correctly.
+    all: bool,
     entries: Vec<ListEntry>,
     /// Everything the walk saw, so a capped list never reads as a whole one.
     total_entries: usize,
@@ -680,6 +705,46 @@ mod tests {
         // whole reason this is not `exec ls`.
         assert!(!paths.contains(&"target"), "{paths:?}");
         assert!(!paths.contains(&".gitignore"), "{paths:?}");
+    }
+
+    #[test]
+    fn list_shows_ignored_and_hidden_entries_only_when_asked() {
+        let workspace = TestWorkspace::new();
+        workspace.write("src/lib.rs", "one\n");
+        workspace.write("target/debug/artifact", "build output\n");
+        workspace.write(".gitignore", "target\n");
+        let tools = workspace.tools();
+
+        let ordinary = output_json(&tools.execute_sync(&call("list", json!({}))).unwrap());
+        let everything = output_json(
+            &tools
+                .execute_sync(&call("list", json!({"all": true})))
+                .unwrap(),
+        );
+
+        let names = |output: &Value| {
+            output["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["path"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            !names(&ordinary)
+                .iter()
+                .any(|name| name.starts_with("target"))
+        );
+        assert!(
+            names(&everything)
+                .iter()
+                .any(|name| name.starts_with("target"))
+        );
+        assert!(names(&everything).contains(&".gitignore".to_owned()));
+        // The flag is reported, so an absence in an ordinary listing can be read
+        // as "not shown" rather than "not there".
+        assert_eq!(ordinary["all"], false);
+        assert_eq!(everything["all"], true);
     }
 
     #[test]

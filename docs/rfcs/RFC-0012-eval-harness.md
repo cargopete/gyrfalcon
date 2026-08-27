@@ -369,12 +369,50 @@ question that three RFC sections had been arguing about, and it works for any
 tool. The obvious next uses are `search` and `list`, both of which have been
 assumed useful and neither of which has been withheld to find out.
 
+### 9.9 Withholding `search` and `list`
+
+**Measured on 2026-08-27**, three cases, three arms, about fifty pence.
+
+| case | control | `--without list` | `--without search` |
+|---|---|---|---|
+| `rename-across-files` | patch x3, cargo, **list**, read x3 | patch x3, gate x2, read x3, **search** | patch x3, cargo, **list**, read x3 |
+| `count-without-editing` | **search x2** | read, **search** | **read** only |
+| `fix-failing-test` | patch, cargo, **exec**, gate, list, read | patch, cargo x3, read | patch, cargo, **list**, read |
+| input tokens | 61,874 | 57,966 | 45,801 |
+
+All nine runs passed.
+
+**The prediction about `list` was refuted, and that is the useful part.** It was
+written down before the runs: withhold `list` and `exec` comes back, as it did
+before `list` existed. It did not. The model used `search` and `read` and never
+reached for a shell. So `list` is a preference rather than a necessity, at least
+on fixtures small enough to read whole.
+
+**`search` is not load-bearing on this corpus, which says more about the corpus
+than about `search`.** `count-without-editing` exists to count occurrences of
+`.unwrap()`, and without `search` the model read the file and counted three,
+naming the lines. Every fixture here is under ten files. A finding that search
+is redundant on a ten-file crate is not a finding about search.
+
+**The one `exec` call was in the control arm**, where `list` was available and
+had already been used: `find . -maxdepth 3 -name .gyr`. `list` cannot answer
+that, because it respects ignore rules. RFC-0005 section 6.1 has the fix and the
+argument for building it on a single observation.
+
+**Fewer tools cost fewer tokens**, by more than the noise floor: 45,801 against
+61,874 for the same three cases and the same outcomes, a 26% difference against
+a measured 6.6% run-to-run variance. Confounded, because the leaner arm also
+made fewer calls, but suggestive that a tool surface has a price and that adding
+one is not free.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is
   tempting and is prescribing method by the back door.
-- What `--without search` and `--without list` do to the corpus. Both tools are
-  assumed useful and neither has been withheld to find out.
+- ~~What `--without search` and `--without list` do to the corpus.~~ Answered in
+  section 9.9. The follow-on question is whether either earns its place on a
+  workspace large enough that reading everything is not an option, which this
+  corpus cannot ask.
 - Whether a case needs a per-case timeout distinct from its turn limit, since a
   model can spend a great deal of wall time inside one turn.
 - How many runs of a live case are needed before a number means anything. First
