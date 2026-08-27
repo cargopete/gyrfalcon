@@ -133,7 +133,7 @@ command and costs the design nothing.
 
 ## 7. Verification
 
-**Measured on 2026-08-27.** The workspace passes 97 tests and Clippy with
+**Measured on 2026-08-27.** The workspace passes 99 tests and Clippy with
 `-D warnings`.
 
 - Command parsing, including the case that caught a real bug. The first rule was
@@ -143,8 +143,14 @@ command and costs the design nothing.
   therefore a submission. A lone unknown word is still a mistyped command and
   gets a correction rather than being quietly sent to a model, and a known
   command word wins over whatever follows it, as in any shell.
-- The palette pinned to its mandated values, so this file cannot drift from the
-  style it is implementing.
+- The palette pinned to its mandated values, so the implementation cannot drift
+  from the style it implements, and rendered at all three depths through a
+  function that takes the depth rather than reading a global. The first version
+  of that test passed because the global happened to default to off, which is a
+  green light for the wrong reason.
+- `--plain` emitting nothing at all. A smoke run caught it emitting a bold
+  sequence: colour was suppressed and the attribute was not, which is not plain
+  but untidy.
 
 **Observed on 2026-08-27**, driving the built `gyr` binary against a local fake
 endpoint with four lines piped at it:

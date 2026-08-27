@@ -100,7 +100,11 @@ impl Colour {
     /// The escape sequence that selects this colour, empty when colour is off.
     #[must_use]
     pub fn sequence(self) -> String {
-        match depth() {
+        self.sequence_at(depth())
+    }
+
+    fn sequence_at(self, depth: Depth) -> String {
+        match depth {
             Depth::True => {
                 let (red, green, blue) = self.rgb;
                 format!("\u{1b}[38;2;{red};{green};{blue}m")
@@ -118,13 +122,26 @@ pub fn paint(colour: Colour, value: &str) -> String {
 }
 
 /// Paints a value in one colour with attributes such as [`BOLD`].
+///
+/// When colour is off, so are the attributes. `--plain` means no escape
+/// sequences at all, not colour removed and a stray bold left behind for
+/// whatever is reading the pipe.
 #[must_use]
 pub fn paint_with(colour: Colour, attributes: &[&str], value: &str) -> String {
-    let sequence = colour.sequence();
-    if sequence.is_empty() && attributes.is_empty() {
+    paint_at(depth(), colour, attributes, value)
+}
+
+/// The rendering, with the depth passed in rather than read from a global, so a
+/// test measures the rule instead of the process's startup state.
+fn paint_at(depth: Depth, colour: Colour, attributes: &[&str], value: &str) -> String {
+    if depth == Depth::None {
         return value.to_owned();
     }
-    format!("{}{sequence}{value}{RESET}", attributes.concat())
+    format!(
+        "{}{}{value}{RESET}",
+        attributes.concat(),
+        colour.sequence_at(depth)
+    )
 }
 
 /// A mono instrument label: the stamped plate above a dial, in the house style.
@@ -142,11 +159,29 @@ mod tests {
     #[test]
     fn a_colour_renders_exactly_in_truecolor_and_approximately_otherwise() {
         assert_eq!(
-            format!("\u{1b}[38;2;{};{};{}m", 0x8b, 0xb8, 0xdc),
-            "\u{1b}[38;2;139;184;220m"
+            SLATE.sequence_at(Depth::True),
+            "\u{1b}[38;2;139;184;220m",
+            "truecolor carries the mandated value exactly"
         );
-        assert_eq!(SLATE.indexed, 110);
-        assert_eq!(RUST.indexed, 173);
+        assert_eq!(SLATE.sequence_at(Depth::Indexed), "\u{1b}[38;5;110m");
+        assert_eq!(RUST.sequence_at(Depth::True), "\u{1b}[38;2;205;133;96m");
+        assert_eq!(RUST.sequence_at(Depth::Indexed), "\u{1b}[38;5;173m");
+    }
+
+    #[test]
+    fn plain_emits_no_escape_sequences_at_all() {
+        // Including the attributes. Colour removed with a stray bold left
+        // behind is not plain, it is untidy.
+        assert_eq!(paint_at(Depth::None, SLATE, &[], "tool"), "tool");
+        assert_eq!(paint_at(Depth::None, RUST, &[BOLD], "approval"), "approval");
+        assert_eq!(SLATE.sequence_at(Depth::None), "");
+    }
+
+    #[test]
+    fn attributes_precede_the_colour_so_neither_cancels_the_other() {
+        let painted = paint_at(Depth::True, RUST, &[BOLD], "approval");
+
+        assert_eq!(painted, "\u{1b}[1m\u{1b}[38;2;205;133;96mapproval\u{1b}[0m");
     }
 
     #[test]
