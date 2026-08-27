@@ -198,7 +198,9 @@ chosen that retention mode.
 8. OS sandbox enforcement. **Done on macOS** in RFC-0009; Linux is unimplemented
    and fails closed rather than running unconfined. `exec` followed in RFC-0010,
    with argument vectors and no shell.
-9. Rust diagnostic gate and representative eval corpus.
+9. Rust diagnostic gate and representative eval corpus. **Gate done** in
+   RFC-0011, which answers "rolls back or refuses" with refuses and says why.
+   The eval corpus is still owed, and several open questions here need it.
 10. Interactive terminal interface. **Done** in RFC-0007: line-based, so the
     transcript stays in the terminal's scrollback.
 11. ChatGPT OAuth, after the transport is independently sound.

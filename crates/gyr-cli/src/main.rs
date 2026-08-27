@@ -42,6 +42,7 @@ use gyr_protocol::StopReason;
 use gyr_protocol::ToolDefinition;
 use gyr_rust::CargoLimits;
 use gyr_rust::CargoTool;
+use gyr_rust::GateTool;
 use gyr_sandbox::Sandbox;
 use gyr_tools::ToolLimits;
 use gyr_tools::WorkspaceTools;
@@ -236,7 +237,11 @@ fn tool_set(workspace: &Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet> {
     ];
     if workspace.join("Cargo.toml").is_file() {
         runtimes.push(Box::new(
-            CargoTool::new(workspace, CargoLimits::default(), sandbox)
+            CargoTool::new(workspace, CargoLimits::default(), Arc::clone(&sandbox))
+                .map_err(|error| anyhow::anyhow!("{error}"))?,
+        ));
+        runtimes.push(Box::new(
+            GateTool::new(workspace, CargoLimits::default(), sandbox)
                 .map_err(|error| anyhow::anyhow!("{error}"))?,
         ));
     }

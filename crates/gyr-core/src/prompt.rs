@@ -47,6 +47,14 @@ Tool discipline:
   than guessing which occurrence the tool will choose. It will not guess either.
 - `search` is literal, not a regular expression, and is bounded. An empty result
   is a fact about the search, not proof that nothing exists.
+- `gate` is how you tell whether an edit batch is working. Call it with start
+  before you begin editing, then check after every few edits. A multi-site Rust
+  change may not compile in the middle, and that is expected; what matters is
+  whether the distinct error set is shrinking. A verdict of regressing means
+  revert the last edits, stalled means try a different approach rather than the
+  same one again, and exhausted means stop. A verdict of unchanged means the
+  build is green because you changed nothing, which is not the same as fixing
+  anything.
 - `cargo` returns parsed diagnostics. Read the `counts`, which describe the whole
   run, before reading the `diagnostics` list, which may have been capped;
   `dropped_diagnostics` says how many are missing. A green build with no

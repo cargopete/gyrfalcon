@@ -21,6 +21,7 @@ use serde_json::json;
 use crate::diagnostics;
 use crate::diagnostics::Diagnostic;
 use crate::diagnostics::DiagnosticCounts;
+use crate::diagnostics::ParsedDiagnostics;
 use gyr_exec::process;
 
 /// The longest a package name or test filter may be.
@@ -170,6 +171,63 @@ impl CargoTool {
             })
             .collect();
         format!("cargo {}", shown.join(" "))
+    }
+
+    /// Runs `cargo check` and returns the parsed diagnostics.
+    ///
+    /// The gate needs the diagnostic set rather than the rendered tool output,
+    /// and it needs it from exactly the same invocation the `cargo` tool would
+    /// make, so a verdict and a `cargo check` result cannot disagree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError`] when the child cannot be run, and reports a
+    /// timeout as an error because a gate has no honest verdict without a
+    /// complete diagnostic set.
+    pub async fn parsed_check(&self) -> Result<ParsedDiagnostics, ToolError> {
+        let request = CargoRequest {
+            command: CargoCommand::Check,
+            package: None,
+            filter: None,
+        };
+        let arguments = self.arguments(&request);
+        let execution = process::run(
+            &Self::program(),
+            &arguments,
+            &self.root,
+            self.sandbox.as_ref(),
+            self.limits.max_captured_bytes,
+            self.limits.timeout,
+        )
+        .await?;
+        if execution.timed_out {
+            return Err(ToolError::new(format!(
+                "cargo check was killed after {} seconds, so there is no diagnostic set to \
+                 compare",
+                self.limits.timeout.as_secs()
+            )));
+        }
+        let parsed = diagnostics::parse(&execution.stdout);
+        // Cargo failing without emitting a single compiler message means it did
+        // not get as far as the compiler. Reporting zero errors there would be
+        // the absent-data-as-healthy failure this project keeps refusing.
+        if parsed.counts.errors == 0 && execution.exit_code != Some(0) {
+            return Err(ToolError::new(format!(
+                "cargo check failed before compiling: {}",
+                capped(execution.stderr.trim(), self.limits.max_output_bytes)
+            )));
+        }
+        Ok(parsed)
+    }
+
+    /// The Cargo invocation the gate will make, for the approval subject.
+    #[must_use]
+    pub fn check_subject(&self) -> String {
+        self.subject(&self.arguments(&CargoRequest {
+            command: CargoCommand::Check,
+            package: None,
+            filter: None,
+        }))
     }
 
     async fn run(&self, request: CargoRequest) -> Result<ToolOutput, ToolError> {

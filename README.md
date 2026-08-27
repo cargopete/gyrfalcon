@@ -27,12 +27,20 @@ CI and evals.
   Chat Completions, each keeping its own conversation state so continuation does
   not lose reasoning items or content ordering. Recorded parser tests
   throughout; Qwen and Anthropic also have local HTTP/SSE wire tests.
-- **Five tools.** `read` returns bounded, numbered, fingerprinted ranges.
+- **Six tools.** `read` returns bounded, numbered, fingerprinted ranges.
   `search` is literal and ignore-aware with explicit totals. `apply_patch`
   replaces one exact occurrence and refuses a stale or ambiguous edit. `exec`
   runs one program with one argument vector. `cargo` runs a closed set of
   subcommands and returns parsed diagnostics, so an `E0308` arrives as a level,
   a code, a file, a line and a column rather than as a page of compiler output.
+- **A diagnostic gate**, which is the part that makes this a Rust agent rather
+  than a general one. A multi-site Rust change passes through a state that does
+  not compile, so the question after each edit is not "does it build" but "is
+  the distinct error set shrinking". `gate start` takes a baseline, `gate check`
+  returns a verdict: improving, regressing, stalled, exhausted, green, or
+  `unchanged` for a build that is green because nothing was touched. That last
+  one exists because a green build with no material diff is somebody else's
+  success, and a model should have to look at a field that says so.
 - **Approval enforced below the model.** Every call is classified read-only,
   mutating or process. Read-only calls proceed. Anything else asks, and a
   session rule is keyed on the tool and the resolved target, never on a
@@ -67,9 +75,11 @@ remains available, is never the default, appears in the approval prompt as
 
 ### What does not exist yet
 
-A sandbox on Linux or Windows. Shells and pipelines. The Rust diagnostic gate
-that tracks a diagnostic set across an edit batch. Conversation state across
-process restarts. Log replay. Compaction. A configuration file.
+A sandbox on Linux or Windows. Shells and pipelines. An eval corpus, which
+several open questions are waiting on. Rollback: the gate refuses rather than
+reverting, because a shadow copy of the workspace is a worse version of git.
+Conversation state across process restarts. Log replay. Compaction. A
+configuration file.
 
 These are missing features. None of them is delegated to the system prompt, and
 none is claimed to be present.
@@ -161,6 +171,7 @@ The command is `gyr`; Gyrfalcon is the project.
 - [RFC-0008: The structured Cargo tool](docs/rfcs/RFC-0008-cargo-tool.md)
 - [RFC-0009: Operating-system sandbox](docs/rfcs/RFC-0009-sandbox.md)
 - [RFC-0010: Process execution](docs/rfcs/RFC-0010-exec.md)
+- [RFC-0011: The Rust diagnostic gate](docs/rfcs/RFC-0011-diagnostic-gate.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed in
 source, documented by a provider, or inferred. Quantitative claims carry a date
@@ -185,7 +196,7 @@ Eight crates:
 - `gyr-tools` — workspace filesystem tools and their hard output limits.
 - `gyr-sandbox` — operating-system containment. Rewrites a command; never spawns.
 - `gyr-exec` — the process runner and the `exec` tool.
-- `gyr-rust` — the `cargo` tool and diagnostic parsing.
+- `gyr-rust` — the `cargo` tool, diagnostic parsing and the gate.
 - `gyr-cli` — the `gyr` executable, its session loop, renderer, palette and
   approval prompt.
 

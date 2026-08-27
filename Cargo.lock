@@ -596,9 +596,11 @@ dependencies = [
  "gyr-exec",
  "gyr-protocol",
  "gyr-sandbox",
+ "ignore",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
