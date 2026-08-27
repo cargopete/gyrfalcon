@@ -82,9 +82,19 @@ run any process rather than quietly running it unconfined. `--sandbox none`
 remains available, is never the default, appears in the approval prompt as
 `unconfined`, and is written into the session log.
 
+Linux is decided but not built, and RFC-0009 section 5.1 records why each way:
+a small `gyr-confine` helper that applies Landlock to itself and then `exec`s,
+because Landlock restrictions inherit across `exec` and that needs no `unsafe`
+where applying them to a child would; a floor of kernel 6.7, because one
+mechanism that can be verified beats two that can each be half-verified; and no
+code until the escape tests run on a real kernel, because an unverifiable
+security boundary is the thing this repository keeps refusing to write. CI
+reports the hosted runner at kernel 6.17 with Landlock ABI 7, so the floor is
+reachable and the blocker is now only the work.
+
 ### What does not exist yet
 
-A sandbox on Linux or Windows. Shells and pipelines. Rollback: the gate refuses
+A sandbox on Linux (decided, not built) or Windows. Shells and pipelines. Rollback: the gate refuses
 rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Conversation state across process restarts. Log replay. Compaction. A
 configuration file.
@@ -255,6 +265,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 gyr eval --model claude-sonnet   # needs a credential; not part of cargo test
 ```
+
+CI runs the first three on macOS and Linux. It found a cross-platform defect on
+its first Linux build, before it had been asked to do the thing it was added
+for.
 
 Nine crates:
 
