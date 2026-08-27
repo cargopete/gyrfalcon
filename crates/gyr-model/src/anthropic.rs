@@ -28,10 +28,14 @@ use crate::ModelError;
 use crate::ModelEventStream;
 use crate::ModelFuture;
 use crate::ModelSession;
+use crate::SessionState;
 use crate::elided_marker;
 use crate::sse::SseDecoder;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Bump when the persisted history shape changes. RFC-0014 section 3.
+const STATE_VERSION: u32 = 1;
 const ERROR_BODY_LIMIT: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,11 +110,11 @@ impl AnthropicSession {
     fn pending_message(input: TurnInput) -> AnthropicMessage {
         match input {
             TurnInput::User { content } => AnthropicMessage {
-                role: "user",
+                role: Role::User,
                 content: vec![json!({"type": "text", "text": content})],
             },
             TurnInput::ToolResults { results } => AnthropicMessage {
-                role: "user",
+                role: Role::User,
                 content: results
                     .into_iter()
                     .map(|result| {
@@ -176,6 +180,35 @@ impl AnthropicSession {
 impl ModelSession for AnthropicSession {
     fn profile(&self) -> &ModelProfile {
         &self.config.profile
+    }
+
+    fn export_state(&self) -> Result<SessionState, ModelError> {
+        let history = self
+            .history
+            .lock()
+            .map_err(|_| ModelError::Protocol("Anthropic history lock was poisoned".into()))?;
+        Ok(SessionState {
+            provider: ProviderKind::Anthropic,
+            model_key: self.config.profile.key.clone(),
+            version: STATE_VERSION,
+            payload: serde_json::to_value(&*history).map_err(|error| {
+                ModelError::Protocol(format!("cannot serialise Anthropic history: {error}"))
+            })?,
+        })
+    }
+
+    fn restore_state(&mut self, state: &SessionState) -> Result<(), ModelError> {
+        state.check(&self.config.profile, STATE_VERSION)?;
+        let restored: Vec<AnthropicMessage> = serde_json::from_value(state.payload.clone())
+            .map_err(|error| {
+                ModelError::Configuration(format!("cannot read Anthropic history: {error}"))
+            })?;
+        let mut history = self
+            .history
+            .lock()
+            .map_err(|_| ModelError::Protocol("Anthropic history lock was poisoned".into()))?;
+        *history = restored;
+        Ok(())
     }
 
     fn elide_tool_results(&mut self, keep_recent: usize) -> Result<Elision, ModelError> {
@@ -356,9 +389,19 @@ fn truncate_for_error(body: &str) -> &str {
     &body[..boundary]
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+/// A closed set rather than a string, so a history read back from disk is
+/// validated on the way in instead of being accepted and sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Role {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct AnthropicMessage {
-    role: &'static str,
+    role: Role,
     content: Vec<Value>,
 }
 
@@ -636,7 +679,7 @@ impl MessagesStreamParser {
             .map(ContentBlock::wire_value)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(AnthropicMessage {
-            role: "assistant",
+            role: Role::Assistant,
             content,
         })
     }
@@ -899,6 +942,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn state_round_trips_into_a_request_that_is_byte_identical() {
+        let profile = crate::builtin_profile("claude-opus").unwrap();
+        let original = AnthropicSession::new(AnthropicConfig::new("key", profile.clone())).unwrap();
+        original.history.lock().unwrap().extend([
+            AnthropicMessage {
+                role: Role::User,
+                content: vec![json!({"type": "text", "text": "read the file"})],
+            },
+            AnthropicMessage {
+                role: Role::Assistant,
+                content: vec![json!({
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "read",
+                    "input": {"path": "src/lib.rs"},
+                })],
+            },
+            AnthropicMessage {
+                role: Role::User,
+                content: vec![json!({
+                    "type": "tool_result",
+                    "tool_use_id": "call-1",
+                    "content": "fn main() {}",
+                    "is_error": false,
+                })],
+            },
+        ]);
+
+        let state = original.export_state().unwrap();
+        let mut restored = AnthropicSession::new(AnthropicConfig::new("key", profile)).unwrap();
+        restored.restore_state(&state).unwrap();
+
+        // Serialising and deserialising is not the claim. The claim is that the
+        // next request is the one the original would have sent.
+        let pending = AnthropicSession::pending_message(TurnInput::User {
+            content: "and now?".into(),
+        });
+        assert_eq!(
+            restored.request_body(&pending).unwrap(),
+            original.request_body(&pending).unwrap()
+        );
+    }
+
+    #[test]
+    fn state_from_another_provider_model_or_version_is_refused() {
+        let profile = crate::builtin_profile("claude-opus").unwrap();
+        let mut session = AnthropicSession::new(AnthropicConfig::new("key", profile)).unwrap();
+        let good = session.export_state().unwrap();
+
+        let wrong_provider = SessionState {
+            provider: ProviderKind::Qwen,
+            ..good.clone()
+        };
+        let wrong_model = SessionState {
+            model_key: "claude-sonnet".into(),
+            ..good.clone()
+        };
+        let wrong_version = SessionState {
+            version: good.version + 1,
+            ..good
+        };
+
+        for (state, expected) in [
+            (wrong_provider, "not Anthropic"),
+            (wrong_model, "not claude-opus"),
+            (wrong_version, "this build reads version"),
+        ] {
+            let error = session.restore_state(&state).unwrap_err();
+            assert!(error.to_string().contains(expected), "said: {error}");
+        }
+    }
+
+    #[test]
     fn elision_hollows_the_oldest_results_and_keeps_the_recent_ones() {
         let profile = crate::builtin_profile("claude-opus").unwrap();
         let mut session = AnthropicSession::new(AnthropicConfig::new("key", profile)).unwrap();
@@ -906,7 +1022,7 @@ mod tests {
             let mut history = session.history.lock().unwrap();
             for index in 0..4 {
                 history.push(AnthropicMessage {
-                    role: "user",
+                    role: Role::User,
                     content: vec![json!({
                         "type": "tool_result",
                         "tool_use_id": format!("call-{index}"),
@@ -947,7 +1063,7 @@ mod tests {
         let profile = crate::builtin_profile("claude-opus").unwrap();
         let mut session = AnthropicSession::new(AnthropicConfig::new("key", profile)).unwrap();
         session.history.lock().unwrap().push(AnthropicMessage {
-            role: "user",
+            role: Role::User,
             content: vec![json!({
                 "type": "tool_result",
                 "tool_use_id": "call-1",

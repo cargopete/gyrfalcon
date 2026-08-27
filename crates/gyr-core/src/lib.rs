@@ -7,6 +7,7 @@
 
 pub mod approval;
 pub mod prompt;
+pub mod resume;
 pub mod session;
 pub mod workspace;
 

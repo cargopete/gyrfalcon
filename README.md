@@ -48,6 +48,14 @@ CI and evals.
   session rule is keyed on the tool and the resolved target, never on a
   description of what a command probably does. A refusal returns to the model as
   an ordinary tool result under its original call ID.
+- **Resumable sessions.** Closing the terminal used to lose the conversation.
+  `gyr --resume` continues the most recent one in the workspace, or a named one.
+  What is persisted is the adapter's own native history, not the session log:
+  the log holds normalised events, and rebuilding a provider's content ordering
+  from those would reconstruct something plausible rather than something
+  identical. A state from another provider, model or payload version is refused
+  rather than half-loaded. The file holds your source, because tool results are
+  the conversation, so it lives in the git-ignored `.gyr/` at mode 0600.
 - **A context budget.** A session used to grow its history until the provider
   refused the request, and then keep refusing, without saying why. It now
   watches the reported input tokens against the model's documented window, tells
@@ -108,8 +116,8 @@ simply refuses everything.
 Shells and pipelines. Rollback: the gate refuses
 rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Summarising compaction, and any context relief at all for OpenAI, whose
-server-side continuation keeps no local history to reduce. Conversation state
-across process restarts. Log replay. A configuration file.
+server-side continuation keeps no local history to reduce. Log replay, which section 2 of RFC-0014
+argues cannot be done honestly from a normalised log. A configuration file.
 
 The eval corpus is eight cases long, which is a start rather than a corpus. All
 eight pass against `claude-sonnet-5`, the six-case sweep costing about
@@ -214,7 +222,8 @@ gyr --model claude-opus
 
 That opens a session. Inside it, `/help`, `/status`, `/log` and `/exit`; Ctrl-C
 cancels the current turn and keeps the conversation; Ctrl-D leaves. History
-persists to `.gyr/history`.
+persists to `.gyr/history`, and the conversation itself to `.gyr/sessions`, so
+`gyr --resume` picks it up where you left it.
 
 For a script, CI or an eval, one submission and an exit code:
 
@@ -263,6 +272,7 @@ The command is `gyr`; Gyrfalcon is the project.
 - [RFC-0011: The Rust diagnostic gate](docs/rfcs/RFC-0011-diagnostic-gate.md)
 - [RFC-0012: The eval corpus and harness](docs/rfcs/RFC-0012-eval-harness.md)
 - [RFC-0013: The context budget](docs/rfcs/RFC-0013-context-budget.md)
+- [RFC-0014: Resuming a session](docs/rfcs/RFC-0014-session-resumption.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed in
 source, documented by a provider, or inferred. Quantitative claims carry a date

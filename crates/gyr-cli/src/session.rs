@@ -83,6 +83,8 @@ pub struct Session<S> {
     pub approvals: String,
     pub log_path: String,
     pub history_path: std::path::PathBuf,
+    /// Where this conversation is persisted after each submission.
+    pub state_path: std::path::PathBuf,
 }
 
 impl<S> Session<S>
@@ -161,6 +163,20 @@ where
         // Aborted so a stale handler cannot cancel the next submission.
         interrupt.abort();
 
+        // After each submission rather than continuously: a submission is the
+        // unit that either happened or did not.
+        if let Ok(state) = self.agent.session().export_state()
+            && let Err(error) = gyr_core::resume::save(&self.state_path, &state)
+        {
+            println!(
+                "{}",
+                style::paint(
+                    style::WARN,
+                    &format!("  could not save the session: {error}")
+                )
+            );
+        }
+
         match result {
             Ok(run) if run.stop_reason == StopReason::Cancelled => {
                 println!(
@@ -186,6 +202,7 @@ where
             ("approvals", self.approvals.clone()),
             ("sandbox", self.sandbox.clone()),
             ("log", self.log_path.clone()),
+            ("state", self.state_path.display().to_string()),
             ("tokens", describe_usage(usage)),
         ])
     }

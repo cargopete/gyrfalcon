@@ -31,6 +31,7 @@ use gyr_core::approval::Interactive;
 use gyr_core::approval::ReadOnly;
 use gyr_core::prompt::PromptContext;
 use gyr_core::prompt::system_prompt;
+use gyr_core::resume;
 use gyr_core::session::JsonlSessionLog;
 use gyr_core::session::SessionId;
 use gyr_core::session::SessionMeta;
@@ -126,6 +127,9 @@ struct CommonArgs {
     /// when absent.
     #[arg(long)]
     no_thinking: bool,
+    /// Continue a previous session. Bare, the most recent in this workspace.
+    #[arg(long, num_args = 0..=1, default_missing_value = "")]
+    resume: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -270,6 +274,7 @@ fn prompt_context(
 /// Everything a submission needs, assembled once.
 struct Prepared {
     agent: Agent<Box<dyn ModelSession>, ToolSet>,
+    state_path: PathBuf,
     usage: std::sync::Arc<std::sync::Mutex<gyr_protocol::TokenUsage>>,
     settings: RunSettings,
     sandbox_label: String,
@@ -286,7 +291,7 @@ fn prepare(common: &CommonArgs) -> Result<Prepared> {
     let tools = tool_set(&settings.workspace, Arc::clone(&sandbox))?;
     let definitions = tools.definitions();
     let context = prompt_context(&settings.workspace, settings.mode, &definitions);
-    let model = config::build_session(&settings, system_prompt(&context), definitions)?;
+    let mut model = config::build_session(&settings, system_prompt(&context), definitions)?;
 
     let log = JsonlSessionLog::create(
         &settings.log_path,
@@ -301,6 +306,21 @@ fn prepare(common: &CommonArgs) -> Result<Prepared> {
             max_model_turns: settings.max_turns.get(),
         },
     )?;
+
+    // Restoring before the first turn, so the conversation continues rather than
+    // starting. A mismatch refuses here rather than confusing the provider later.
+    let state_path = match resume_from(common.resume.as_deref(), &settings.workspace)? {
+        Some((id, path)) => {
+            let state = resume::load(&path)?;
+            model.restore_state(&state)?;
+            eprintln!(
+                "{}",
+                style::paint(style::FAINT, &format!("resumed session {id}"))
+            );
+            path
+        }
+        None => resume::state_path(&settings.workspace, session_id.as_str()),
+    };
 
     let renderer = Renderer::new(settings.show_reasoning);
     let usage = renderer.usage_handle();
@@ -317,6 +337,7 @@ fn prepare(common: &CommonArgs) -> Result<Prepared> {
 
     Ok(Prepared {
         agent,
+        state_path,
         usage,
         settings,
         sandbox_label,
@@ -335,6 +356,7 @@ async fn session(common: CommonArgs) -> Result<ExitCode> {
         approvals: prepared.settings.mode.label().to_owned(),
         log_path: prepared.settings.log_path.display().to_string(),
         history_path: prepared.settings.workspace.join(".gyr").join("history"),
+        state_path: prepared.state_path,
     };
     let _ = prepared.session_id;
     session.run().await?;
@@ -367,11 +389,51 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     });
 
     let result = prepared.agent.run_cancellable(request, &cancel).await?;
+    save_state(&prepared.agent, &prepared.state_path)?;
     Ok(match result.stop_reason {
         StopReason::EndTurn => ExitCode::SUCCESS,
         StopReason::Cancelled => ExitCode::from(130),
         _ => ExitCode::FAILURE,
     })
+}
+
+/// Resolves `--resume`, bare or named, into a state file.
+///
+/// Bare means the most recent in this workspace. A named session that does not
+/// exist is an error rather than a silent new session, because a person who
+/// asked to continue something has said what they want.
+fn resume_from(requested: Option<&str>, workspace: &Path) -> Result<Option<(String, PathBuf)>> {
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+    if requested.is_empty() {
+        let Some(found) = resume::most_recent(workspace)? else {
+            bail!(
+                "no session to resume in {}; run without --resume to start one",
+                workspace.display()
+            );
+        };
+        return Ok(Some(found));
+    }
+    let path = resume::state_path(workspace, requested);
+    if !path.is_file() {
+        bail!("no session {requested:?} in {}", workspace.display());
+    }
+    Ok(Some((requested.to_owned(), path)))
+}
+
+/// Persists the session's native state, so it can be continued later.
+fn save_state<S: ModelSession, T: gyr_core::ToolRuntime>(
+    agent: &Agent<S, T>,
+    path: &Path,
+) -> Result<()> {
+    // A provider that cannot export is not an error: OpenAI's continuation may
+    // have expired anyway, and a one-shot against a provider without state is
+    // still a complete run.
+    match agent.session().export_state() {
+        Ok(state) => resume::save(path, &state).map_err(Into::into),
+        Err(_) => Ok(()),
+    }
 }
 
 fn settings(args: &CommonArgs, session_id: &SessionId) -> Result<RunSettings> {

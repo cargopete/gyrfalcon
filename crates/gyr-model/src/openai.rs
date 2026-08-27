@@ -25,9 +25,13 @@ use crate::ModelError;
 use crate::ModelEventStream;
 use crate::ModelFuture;
 use crate::ModelSession;
+use crate::SessionState;
 use crate::sse::SseDecoder;
 
 const ERROR_BODY_LIMIT: usize = 4_096;
+
+/// Bump when the persisted state shape changes. RFC-0014 section 3.
+const STATE_VERSION: u32 = 1;
 
 #[derive(Clone)]
 pub struct OpenAiConfig {
@@ -168,6 +172,43 @@ impl OpenAiSession {
 impl ModelSession for OpenAiSession {
     fn profile(&self) -> &ModelProfile {
         &self.config.profile
+    }
+
+    /// Exports the continuation handle, which is all the state there is.
+    ///
+    /// The provider may have expired it by the time it is used. That failure
+    /// arrives on the next request, in the provider's own words, and is the
+    /// case RFC-0001 section 9 anticipated when it called continuation IDs an
+    /// optimisation.
+    fn export_state(&self) -> Result<SessionState, ModelError> {
+        let previous = self
+            .previous_response_id
+            .lock()
+            .map_err(|_| ModelError::Protocol("OpenAI response lock was poisoned".into()))?;
+        Ok(SessionState {
+            provider: ProviderKind::OpenAi,
+            model_key: self.config.profile.key.clone(),
+            version: STATE_VERSION,
+            payload: serde_json::json!({ "previous_response_id": *previous }),
+        })
+    }
+
+    fn restore_state(&mut self, state: &SessionState) -> Result<(), ModelError> {
+        state.check(&self.config.profile, STATE_VERSION)?;
+        let restored = state
+            .payload
+            .get("previous_response_id")
+            .ok_or_else(|| {
+                ModelError::Configuration("OpenAI state has no previous_response_id".into())
+            })?
+            .as_str()
+            .map(ToOwned::to_owned);
+        let mut previous = self
+            .previous_response_id
+            .lock()
+            .map_err(|_| ModelError::Protocol("OpenAI response lock was poisoned".into()))?;
+        *previous = restored;
+        Ok(())
     }
 
     fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream> {
@@ -565,6 +606,22 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn the_continuation_handle_round_trips() {
+        let profile = crate::builtin_profile("terra").unwrap();
+        let original = OpenAiSession::new(OpenAiConfig::new("key", profile.clone())).unwrap();
+        *original.previous_response_id.lock().unwrap() = Some("resp_abc123".into());
+
+        let state = original.export_state().unwrap();
+        let mut restored = OpenAiSession::new(OpenAiConfig::new("key", profile)).unwrap();
+        restored.restore_state(&state).unwrap();
+
+        assert_eq!(
+            *restored.previous_response_id.lock().unwrap(),
+            Some("resp_abc123".to_owned())
+        );
+    }
 
     #[test]
     fn openai_says_it_cannot_elide_rather_than_appearing_to() {

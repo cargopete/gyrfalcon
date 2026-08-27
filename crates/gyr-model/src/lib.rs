@@ -12,6 +12,9 @@ use gyr_protocol::ReasoningEffort;
 use gyr_protocol::ReasoningSupport;
 use gyr_protocol::SamplingDefaults;
 use gyr_protocol::TurnInput;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
 use thiserror::Error;
 
 pub mod anthropic;
@@ -53,6 +56,30 @@ pub trait ModelSession: Send {
             "this provider keeps no local history to elide".into(),
         ))
     }
+
+    /// Serialises this session's native history so it can be continued later.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] when the history cannot be serialised.
+    fn export_state(&self) -> Result<SessionState, ModelError> {
+        Err(ModelError::Configuration(
+            "this provider cannot export its session state".into(),
+        ))
+    }
+
+    /// Replaces this session's history with a previously exported one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::Configuration`] when the state belongs to another
+    /// provider, another model, or another payload version.
+    fn restore_state(&mut self, state: &SessionState) -> Result<(), ModelError> {
+        let _ = state;
+        Err(ModelError::Configuration(
+            "this provider cannot restore a session state".into(),
+        ))
+    }
 }
 
 /// Below this, a result is left alone: replacing it would reclaim nothing and
@@ -68,6 +95,54 @@ pub(crate) fn elided_marker(bytes: usize) -> String {
         "[gyrfalcon elided {bytes} bytes of this earlier tool result to stay within the context \
          window. Run the tool again if you need it.]"
     )
+}
+
+/// One adapter's native history, as bytes the core stores and never reads.
+///
+/// RFC-0003 puts native history inside the adapter so continuation does not
+/// lose reasoning items or content ordering. That boundary holds here: the
+/// adapter serialises its own history and the core persists an opaque payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionState {
+    pub provider: ProviderKind,
+    pub model_key: String,
+    /// Bumped when a payload shape changes, so an old file fails loudly rather
+    /// than deserialising into something almost right.
+    pub version: u32,
+    pub payload: Value,
+}
+
+impl SessionState {
+    /// Refuses a state that does not belong to this session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::Configuration`] on a provider, model or version
+    /// that does not match. All three are refusals rather than warnings:
+    /// Anthropic history in a Qwen session is not a degraded conversation, it
+    /// is a corrupt one, and continuing an Opus conversation on Sonnet is a
+    /// decision a person should make deliberately.
+    pub fn check(&self, profile: &ModelProfile, version: u32) -> Result<(), ModelError> {
+        if self.provider != profile.provider {
+            return Err(ModelError::Configuration(format!(
+                "this state belongs to a {:?} session, not {:?}",
+                self.provider, profile.provider
+            )));
+        }
+        if self.model_key != profile.key {
+            return Err(ModelError::Configuration(format!(
+                "this state belongs to model {}, not {}",
+                self.model_key, profile.key
+            )));
+        }
+        if self.version != version {
+            return Err(ModelError::Configuration(format!(
+                "this state is version {}, and this build reads version {version}",
+                self.version
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// What one elision actually removed.
@@ -89,6 +164,14 @@ impl ModelSession for Box<dyn ModelSession> {
 
     fn elide_tool_results(&mut self, keep_recent: usize) -> Result<Elision, ModelError> {
         (**self).elide_tool_results(keep_recent)
+    }
+
+    fn export_state(&self) -> Result<SessionState, ModelError> {
+        (**self).export_state()
+    }
+
+    fn restore_state(&mut self, state: &SessionState) -> Result<(), ModelError> {
+        (**self).restore_state(state)
     }
 }
 

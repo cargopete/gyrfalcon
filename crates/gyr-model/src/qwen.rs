@@ -29,10 +29,14 @@ use crate::ModelError;
 use crate::ModelEventStream;
 use crate::ModelFuture;
 use crate::ModelSession;
+use crate::SessionState;
 use crate::elided_marker;
 use crate::sse::SseDecoder;
 
 const ERROR_BODY_LIMIT: usize = 4_096;
+
+/// Bump when the persisted history shape changes. RFC-0014 section 3.
+const STATE_VERSION: u32 = 1;
 
 #[derive(Clone)]
 pub struct QwenConfig {
@@ -220,6 +224,35 @@ impl ModelSession for QwenSession {
         &self.config.profile
     }
 
+    fn export_state(&self) -> Result<SessionState, ModelError> {
+        let history = self
+            .history
+            .lock()
+            .map_err(|_| ModelError::Protocol("Qwen history lock was poisoned".into()))?;
+        Ok(SessionState {
+            provider: ProviderKind::Qwen,
+            model_key: self.config.profile.key.clone(),
+            version: STATE_VERSION,
+            payload: serde_json::to_value(&*history).map_err(|error| {
+                ModelError::Protocol(format!("cannot serialise Qwen history: {error}"))
+            })?,
+        })
+    }
+
+    fn restore_state(&mut self, state: &SessionState) -> Result<(), ModelError> {
+        state.check(&self.config.profile, STATE_VERSION)?;
+        let restored: Vec<ChatMessage> =
+            serde_json::from_value(state.payload.clone()).map_err(|error| {
+                ModelError::Configuration(format!("cannot read Qwen history: {error}"))
+            })?;
+        let mut history = self
+            .history
+            .lock()
+            .map_err(|_| ModelError::Protocol("Qwen history lock was poisoned".into()))?;
+        *history = restored;
+        Ok(())
+    }
+
     fn elide_tool_results(&mut self, keep_recent: usize) -> Result<Elision, ModelError> {
         let mut history = self
             .history
@@ -229,7 +262,7 @@ impl ModelSession for QwenSession {
         let mut seen = 0_usize;
         let mut elision = Elision::default();
         for message in history.iter_mut().rev() {
-            if message.role != "tool" {
+            if message.role != Role::Tool {
                 continue;
             }
             seen += 1;
@@ -343,29 +376,43 @@ fn truncate_for_error(body: &str) -> &str {
     &body[..boundary]
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+/// A closed set rather than a string, for the same reason as Anthropic's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Role {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ChatMessage {
-    role: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Role,
+    // Every optional field is skipped when empty on the way out and defaulted on
+    // the way back in. Without the defaults a message that legitimately has no
+    // tool calls serialises fine and then fails to read, which is what the
+    // round-trip test caught.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<ChatToolCall>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
 }
 
 impl ChatMessage {
     fn system(content: String) -> Self {
-        Self::plain("system", content)
+        Self::plain(Role::System, content)
     }
 
     fn user(content: String) -> Self {
-        Self::plain("user", content)
+        Self::plain(Role::User, content)
     }
 
-    fn plain(role: &'static str, content: String) -> Self {
+    fn plain(role: Role, content: String) -> Self {
         Self {
             role,
             content: Some(content),
@@ -377,7 +424,7 @@ impl ChatMessage {
 
     fn tool(tool_call_id: String, content: String) -> Self {
         Self {
-            role: "tool",
+            role: Role::Tool,
             content: Some(content),
             reasoning_content: None,
             tool_calls: Vec::new(),
@@ -386,14 +433,24 @@ impl ChatMessage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+/// The only kind of tool call this surface defines. An enum rather than a
+/// literal so a restored history is validated rather than trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CallKind {
+    Function,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct ChatToolCall {
     id: String,
-    r#type: &'static str,
+    r#type: CallKind,
     function: ChatFunction,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct ChatFunction {
     name: String,
     arguments: String,
@@ -534,7 +591,7 @@ impl QwenStreamParser {
             });
             wire_calls.push(ChatToolCall {
                 id: accumulator.id.clone(),
-                r#type: "function",
+                r#type: CallKind::Function,
                 function: ChatFunction {
                     name: accumulator.name.clone(),
                     arguments: accumulator.arguments.clone(),
@@ -544,7 +601,7 @@ impl QwenStreamParser {
         events.push(ModelEvent::Finished { reason });
 
         let assistant = ChatMessage {
-            role: "assistant",
+            role: Role::Assistant,
             content: (!self.content.is_empty()).then(|| self.content.clone()),
             reasoning_content: (!self.reasoning.is_empty()).then(|| self.reasoning.clone()),
             tool_calls: wire_calls,
@@ -641,6 +698,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn state_round_trips_into_a_request_that_is_byte_identical() {
+        let profile = crate::builtin_profile("qwen3-coder-next").unwrap();
+        let build = || {
+            QwenSession::new(QwenConfig::new("http://127.0.0.1:8000/v1", profile.clone())).unwrap()
+        };
+        let original = build();
+        original.history.lock().unwrap().extend([
+            ChatMessage::plain(Role::User, "read the file".to_owned()),
+            ChatMessage {
+                role: Role::Assistant,
+                content: None,
+                reasoning_content: None,
+                tool_calls: vec![ChatToolCall {
+                    id: "call-1".into(),
+                    r#type: CallKind::Function,
+                    function: ChatFunction {
+                        name: "read".into(),
+                        arguments: "{\"path\":\"src/lib.rs\"}".into(),
+                    },
+                }],
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: Role::Tool,
+                content: Some("fn main() {}".to_owned()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                tool_call_id: Some("call-1".into()),
+            },
+        ]);
+
+        let state = original.export_state().unwrap();
+        let mut restored = build();
+        restored.restore_state(&state).unwrap();
+
+        let pending = QwenSession::pending_messages(TurnInput::User {
+            content: "and now?".into(),
+        });
+        assert_eq!(
+            restored.request_body(&pending).unwrap(),
+            original.request_body(&pending).unwrap()
+        );
+    }
+
+    #[test]
     fn elision_hollows_the_oldest_tool_messages_and_keeps_their_ids() {
         let profile = crate::builtin_profile("qwen3-coder-next").unwrap();
         let mut session =
@@ -649,7 +751,7 @@ mod tests {
             let mut history = session.history.lock().unwrap();
             for index in 0..4 {
                 history.push(ChatMessage {
-                    role: "tool",
+                    role: Role::Tool,
                     content: Some("y".repeat(1_000)),
                     reasoning_content: None,
                     tool_calls: Vec::new(),
@@ -657,7 +759,10 @@ mod tests {
                 });
             }
             // An assistant turn between them must survive untouched.
-            history.push(ChatMessage::plain("assistant", "carrying on".to_owned()));
+            history.push(ChatMessage::plain(
+                Role::Assistant,
+                "carrying on".to_owned(),
+            ));
         }
 
         let elision = session.elide_tool_results(2).unwrap();
