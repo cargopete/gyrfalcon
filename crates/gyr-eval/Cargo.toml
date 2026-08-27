@@ -1,30 +1,30 @@
 [package]
-name = "gyr-cli"
+name = "gyr-eval"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[[bin]]
-name = "gyr"
-path = "src/main.rs"
-
 [dependencies]
-anyhow.workspace = true
-clap.workspace = true
 gyr-core.workspace = true
-gyr-eval.workspace = true
 gyr-exec.workspace = true
 gyr-model.workspace = true
 gyr-protocol.workspace = true
 gyr-rust.workspace = true
 gyr-sandbox.workspace = true
 gyr-tools.workspace = true
-rustyline.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+sha2.workspace = true
+pretty_assertions.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
 
 [lints]
 workspace = true

@@ -2,6 +2,7 @@
 
 mod approve;
 mod config;
+mod evals;
 mod render;
 mod session;
 mod style;
@@ -82,6 +83,8 @@ enum Command {
     Prompt(PromptArgs),
     /// Run one request and exit. For scripts, CI and evals.
     Run(RunArgs),
+    /// Run the eval corpus against a model.
+    Eval(crate::evals::EvalArgs),
 }
 
 // These are switches rather than a state machine because each one means one
@@ -168,6 +171,7 @@ fn dispatch() -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Run(args)) => on_runtime(run(args)),
+        Some(Command::Eval(args)) => on_runtime(evals::run(args)),
         None => on_runtime(session(cli.common)),
     }
 }

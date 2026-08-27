@@ -173,8 +173,10 @@ endpoint over this repository:
 
 ## 10. Open questions
 
-- Whether pipelines earn a designed answer, and what the eval corpus says about
-  how often their absence actually blocks a task.
+- Whether pipelines earn a designed answer, and how often their absence actually
+  blocks a task. RFC-0012 built the harness that can count this: the tool
+  histogram per case is exactly the measurement. The corpus is not yet large
+  enough for the count to mean anything.
 - Whether `directory` should accept a path that does not exist yet, which would
   need the fence to reason about a parent rather than a target.
 - Whether the filtered environment should gain a project-declared allow-list, so

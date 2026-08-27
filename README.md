@@ -52,6 +52,11 @@ CI and evals.
 - **A line-based interface.** Not an alternate-screen one, deliberately: the
   transcript belongs in the terminal's scrollback, where a person goes to find
   what the agent did an hour ago and where selection and copying still work.
+- **An eval harness.** `gyr eval` runs a corpus of cases: a fixture workspace, a
+  prompt, and assertions about the outcome. Assertions decide pass or fail;
+  metrics decide nothing and are read back out of the session log the run
+  produced, which is also how the log's sufficiency gets tested. A case where
+  nothing changed fails even if the code compiled.
 
 ### What is enforced, and what is not
 
@@ -75,11 +80,14 @@ remains available, is never the default, appears in the approval prompt as
 
 ### What does not exist yet
 
-A sandbox on Linux or Windows. Shells and pipelines. An eval corpus, which
-several open questions are waiting on. Rollback: the gate refuses rather than
-reverting, because a shadow copy of the workspace is a worse version of git.
-Conversation state across process restarts. Log replay. Compaction. A
+A sandbox on Linux or Windows. Shells and pipelines. Rollback: the gate refuses
+rather than reverting, because a shadow copy of the workspace is a worse version
+of git. Conversation state across process restarts. Log replay. Compaction. A
 configuration file.
+
+The eval corpus is two cases long. The harness is real and tested; two cases is
+a mechanism rather than evidence, and the open questions in RFC-0010 and
+RFC-0011 are waiting on a corpus large enough to answer them.
 
 These are missing features. None of them is delegated to the system prompt, and
 none is claimed to be present.
@@ -172,6 +180,7 @@ The command is `gyr`; Gyrfalcon is the project.
 - [RFC-0009: Operating-system sandbox](docs/rfcs/RFC-0009-sandbox.md)
 - [RFC-0010: Process execution](docs/rfcs/RFC-0010-exec.md)
 - [RFC-0011: The Rust diagnostic gate](docs/rfcs/RFC-0011-diagnostic-gate.md)
+- [RFC-0012: The eval corpus and harness](docs/rfcs/RFC-0012-eval-harness.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed in
 source, documented by a provider, or inferred. Quantitative claims carry a date
@@ -185,9 +194,10 @@ the correction rather than quietly reading as though it were right all along.
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
+gyr eval --model claude-opus     # needs a credential; not part of cargo test
 ```
 
-Eight crates:
+Nine crates:
 
 - `gyr-protocol` — values crossing crate and frontend boundaries.
 - `gyr-model` — provider session traits and the explicit model catalogue.
@@ -197,6 +207,7 @@ Eight crates:
 - `gyr-sandbox` — operating-system containment. Rewrites a command; never spawns.
 - `gyr-exec` — the process runner and the `exec` tool.
 - `gyr-rust` — the `cargo` tool, diagnostic parsing and the gate.
+- `gyr-eval` — the case format, the runner and the metrics read from a log.
 - `gyr-cli` — the `gyr` executable, its session loop, renderer, palette and
   approval prompt.
 

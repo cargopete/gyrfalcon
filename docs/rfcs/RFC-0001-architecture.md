@@ -200,7 +200,9 @@ chosen that retention mode.
    with argument vectors and no shell.
 9. Rust diagnostic gate and representative eval corpus. **Gate done** in
    RFC-0011, which answers "rolls back or refuses" with refuses and says why.
-   The eval corpus is still owed, and several open questions here need it.
+   **Harness and a first two cases done** in RFC-0012. A corpus large enough to
+   answer the open questions is still owed; two cases is a mechanism, not
+   evidence.
 10. Interactive terminal interface. **Done** in RFC-0007: line-based, so the
     transcript stays in the terminal's scrollback.
 11. ChatGPT OAuth, after the transport is independently sound.

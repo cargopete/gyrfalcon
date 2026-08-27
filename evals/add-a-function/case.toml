@@ -1,0 +1,19 @@
+name = "add-a-function"
+prompt = """
+Add a public function `sum` to src/lib.rs that takes a `&[u32]` and returns \
+their total as a `u32`. Keep the existing functions as they are.
+"""
+max_turns = 12
+
+[expect]
+cargo_check = "clean"
+files_changed = ["src/lib.rs"]
+files_unchanged = ["Cargo.toml"]
+
+[[expect.contains]]
+file = "src/lib.rs"
+text = "pub fn sum"
+
+[[expect.contains]]
+file = "src/lib.rs"
+text = "pub fn one"

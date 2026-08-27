@@ -1,0 +1,19 @@
+name = "fix-type-errors"
+prompt = """
+This crate does not compile. Two functions return the wrong type. Fix them so \
+`cargo check` is clean, changing nothing else.
+"""
+max_turns = 12
+
+[expect]
+cargo_check = "clean"
+files_changed = ["src/lib.rs"]
+files_unchanged = ["Cargo.toml"]
+
+[[expect.not_contains]]
+file = "src/lib.rs"
+text = "\"one\""
+
+[[expect.not_contains]]
+file = "src/lib.rs"
+text = "allow(dead_code)"

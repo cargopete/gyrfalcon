@@ -182,7 +182,8 @@ than at the last check. Keep going."
 ## 10. Open questions
 
 - Whether `exhausted` should be two consecutive checks or a ratio over the
-  batch, which needs an eval corpus to answer rather than an opinion.
+  batch. RFC-0012 records every gate verdict per case, so this is now a query
+  against a corpus rather than an opinion. The corpus is two cases long.
 - Whether a warning that was an error a moment ago should count as resolved,
   which it currently does, and whether that lets a batch launder errors into
   allow attributes.
