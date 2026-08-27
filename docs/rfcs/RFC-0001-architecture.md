@@ -166,8 +166,11 @@ Prompt instructions are guidance. Safety is code.
 - Destructive, external, costly and scope-expanding actions stop for approval.
 - The event log records the proposed action, decision, execution and result.
 
-The MVP will support macOS and Linux. Windows requires a real containment design
-and is not claimed merely because the Rust code compiles there.
+Gyrfalcon supports macOS and Linux. **Windows is not a target**, decided
+2026-08-27 rather than deferred: it would need a containment design of its own,
+and claiming support because the Rust compiles there is exactly the kind of
+claim this document exists to refuse. On Windows, `detect` reports unavailable
+and processes are refused, as on any platform without an implementation.
 
 ## 9. Persistence and context
 

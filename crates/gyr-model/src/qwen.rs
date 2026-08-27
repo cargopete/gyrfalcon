@@ -23,10 +23,13 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
+use crate::ELIDED_MARKER_FLOOR;
+use crate::Elision;
 use crate::ModelError;
 use crate::ModelEventStream;
 use crate::ModelFuture;
 use crate::ModelSession;
+use crate::elided_marker;
 use crate::sse::SseDecoder;
 
 const ERROR_BODY_LIMIT: usize = 4_096;
@@ -215,6 +218,39 @@ impl QwenSession {
 impl ModelSession for QwenSession {
     fn profile(&self) -> &ModelProfile {
         &self.config.profile
+    }
+
+    fn elide_tool_results(&mut self, keep_recent: usize) -> Result<Elision, ModelError> {
+        let mut history = self
+            .history
+            .lock()
+            .map_err(|_| ModelError::Protocol("Qwen history lock was poisoned".into()))?;
+
+        let mut seen = 0_usize;
+        let mut elision = Elision::default();
+        for message in history.iter_mut().rev() {
+            if message.role != "tool" {
+                continue;
+            }
+            seen += 1;
+            if seen <= keep_recent {
+                continue;
+            }
+            let Some(content) = message.content.as_ref() else {
+                continue;
+            };
+            let bytes = content.len();
+            if bytes <= ELIDED_MARKER_FLOOR {
+                continue;
+            }
+            let replacement = elided_marker(bytes);
+            elision.bytes_reclaimed += bytes.saturating_sub(replacement.len());
+            elision.results_elided += 1;
+            // The tool_call_id is left alone: the provider needs every call to
+            // keep a matching result, and an elided one is still a result.
+            message.content = Some(replacement);
+        }
+        Ok(elision)
     }
 
     fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream> {
@@ -603,6 +639,45 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn elision_hollows_the_oldest_tool_messages_and_keeps_their_ids() {
+        let profile = crate::builtin_profile("qwen3-coder-next").unwrap();
+        let mut session =
+            QwenSession::new(QwenConfig::new("http://127.0.0.1:8000/v1", profile)).unwrap();
+        {
+            let mut history = session.history.lock().unwrap();
+            for index in 0..4 {
+                history.push(ChatMessage {
+                    role: "tool",
+                    content: Some("y".repeat(1_000)),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                    tool_call_id: Some(format!("call-{index}")),
+                });
+            }
+            // An assistant turn between them must survive untouched.
+            history.push(ChatMessage::plain("assistant", "carrying on".to_owned()));
+        }
+
+        let elision = session.elide_tool_results(2).unwrap();
+
+        let history = session.history.lock().unwrap();
+        assert_eq!(elision.results_elided, 2);
+        for (index, message) in history.iter().take(4).enumerate() {
+            let content = message.content.as_deref().unwrap();
+            if index < 2 {
+                assert!(content.starts_with("[gyrfalcon elided"), "{index}");
+            } else {
+                assert_eq!(content.len(), 1_000, "{index}");
+            }
+            assert_eq!(
+                message.tool_call_id.as_deref(),
+                Some(&*format!("call-{index}"))
+            );
+        }
+        assert_eq!(history[4].content.as_deref(), Some("carrying on"));
+    }
 
     #[test]
     fn parser_accumulates_reasoning_text_tools_and_usage() {

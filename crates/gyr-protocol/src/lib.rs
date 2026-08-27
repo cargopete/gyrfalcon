@@ -283,4 +283,20 @@ pub enum AgentEvent {
         model_turn: u32,
         result: ToolResult,
     },
+    /// The window is filling. Said once per crossing, to a person and not to the
+    /// model: operator text in an assistant history is the thing RFC-0006 keeps
+    /// approval out of prose for.
+    ContextWarning {
+        model_turn: u32,
+        input_tokens: u64,
+        window_tokens: u32,
+    },
+    /// History was reduced, and by how much. An explicit event rather than a
+    /// silent optimisation, so a transcript that behaves oddly afterwards can be
+    /// traced to the moment it was cut.
+    Elided {
+        model_turn: u32,
+        results_elided: usize,
+        bytes_reclaimed: usize,
+    },
 }

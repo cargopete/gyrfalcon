@@ -38,6 +38,7 @@ use crate::support::Turn;
 use crate::support::text_turn;
 use crate::support::tool_call;
 use crate::support::tool_turn;
+use crate::support::usage_turn;
 
 fn agent(turns: Vec<Turn>) -> Agent<ScriptedSession, ScriptedTools> {
     Agent::new(
@@ -416,4 +417,134 @@ async fn a_tool_set_dispatches_by_tool_name() {
     assert_eq!(names, vec!["first".to_owned(), "second".to_owned()]);
     assert_eq!(chosen.content, "second");
     assert_eq!(unknown.to_string(), "unknown tool \"third\"");
+}
+
+/// A window small enough that the fractions land on readable numbers.
+const WINDOW: u32 = 1_000;
+
+fn budgeted(turns: Vec<Turn>) -> Agent<ScriptedSession, ScriptedTools> {
+    Agent::new(
+        ScriptedSession::new(turns).with_window(Some(WINDOW)),
+        ScriptedTools::default(),
+        AgentConfig::default(),
+    )
+}
+
+fn warnings(result: &gyr_core::RunResult) -> Vec<(u64, u32)> {
+    result
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ContextWarning {
+                input_tokens,
+                window_tokens,
+                ..
+            } => Some((*input_tokens, *window_tokens)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn elisions(result: &gyr_core::RunResult) -> Vec<(usize, usize)> {
+    result
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Elided {
+                results_elided,
+                bytes_reclaimed,
+                ..
+            } => Some((*results_elided, *bytes_reclaimed)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_filling_window_is_reported_once_and_not_on_every_turn() {
+    // 750 of 1000 crosses the 70% mark. The second turn is higher still and
+    // must not produce a second warning: a warning repeated every turn is
+    // noise, and noise is how a real one gets missed.
+    let mut agent = budgeted(vec![
+        Turn::Events(vec![
+            ModelEvent::Usage {
+                usage: gyr_protocol::TokenUsage {
+                    input_tokens: 750,
+                    ..gyr_protocol::TokenUsage::default()
+                },
+            },
+            ModelEvent::ToolCallCompleted {
+                call: tool_call("call-1", "read", "src/lib.rs"),
+            },
+            ModelEvent::Finished {
+                reason: StopReason::ToolUse,
+            },
+        ]),
+        usage_turn(800, "done"),
+    ]);
+
+    let result = agent.run("keep going").await.unwrap();
+
+    assert_eq!(warnings(&result), vec![(750, WINDOW)]);
+}
+
+#[tokio::test]
+async fn a_window_below_the_mark_says_nothing() {
+    let mut agent = budgeted(vec![usage_turn(500, "plenty of room")]);
+
+    let result = agent.run("hello").await.unwrap();
+
+    assert!(warnings(&result).is_empty());
+    assert!(elisions(&result).is_empty());
+}
+
+#[tokio::test]
+async fn crossing_the_higher_mark_elides_and_records_it() {
+    let mut agent = Agent::new(
+        ScriptedSession::new(vec![usage_turn(900, "still here")])
+            .with_window(Some(WINDOW))
+            .eliding(3, 4_096),
+        ScriptedTools::default(),
+        AgentConfig::default(),
+    );
+
+    let result = agent.run("a long conversation").await.unwrap();
+
+    assert_eq!(elisions(&result), vec![(3, 4_096)]);
+    assert_eq!(warnings(&result).len(), 1, "it crossed both marks at once");
+    assert_eq!(
+        agent.session().elide_requests,
+        vec![AgentConfig::default().keep_recent_results]
+    );
+}
+
+#[tokio::test]
+async fn a_provider_that_cannot_elide_does_not_fail_the_run() {
+    // The scripted session refuses, as OpenAI's server-side continuation would.
+    let mut agent = budgeted(vec![usage_turn(900, "still here")]);
+
+    let result = agent.run("a long conversation").await.unwrap();
+
+    assert!(elisions(&result).is_empty());
+    assert_eq!(warnings(&result).len(), 1);
+    assert_eq!(result.stop_reason, StopReason::EndTurn);
+}
+
+#[tokio::test]
+async fn a_model_with_no_documented_window_is_left_alone() {
+    let mut agent = Agent::new(
+        ScriptedSession::new(vec![usage_turn(9_999_999, "enormous")])
+            .with_window(None)
+            .eliding(3, 4_096),
+        ScriptedTools::default(),
+        AgentConfig::default(),
+    );
+
+    let result = agent.run("hello").await.unwrap();
+
+    // Guessing a window and cutting history against the guess would be worse
+    // than an honest refusal from the provider later.
+    assert!(warnings(&result).is_empty());
+    assert!(elisions(&result).is_empty());
+    assert!(agent.session().elide_requests.is_empty());
 }

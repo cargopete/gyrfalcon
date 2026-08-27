@@ -38,6 +38,9 @@ pub struct ScriptedSession {
     profile: ModelProfile,
     turns: VecDeque<Turn>,
     pub inputs: Vec<TurnInput>,
+    /// What `elide_tool_results` will claim to have done, and what it was asked.
+    pub elision: Option<gyr_model::Elision>,
+    pub elide_requests: Vec<usize>,
 }
 
 impl ScriptedSession {
@@ -46,13 +49,36 @@ impl ScriptedSession {
             profile: gyr_model::builtin_profiles().remove(0),
             turns: VecDeque::from(turns),
             inputs: Vec::new(),
+            elision: None,
+            elide_requests: Vec::new(),
         }
+    }
+
+    /// Gives the session a documented window, so the budget logic engages.
+    pub fn with_window(mut self, tokens: Option<u32>) -> Self {
+        self.profile.context_window_tokens = tokens;
+        self
+    }
+
+    pub fn eliding(mut self, results: usize, bytes: usize) -> Self {
+        self.elision = Some(gyr_model::Elision {
+            results_elided: results,
+            bytes_reclaimed: bytes,
+        });
+        self
     }
 }
 
 impl ModelSession for ScriptedSession {
     fn profile(&self) -> &ModelProfile {
         &self.profile
+    }
+
+    fn elide_tool_results(&mut self, keep_recent: usize) -> Result<gyr_model::Elision, ModelError> {
+        self.elide_requests.push(keep_recent);
+        self.elision.ok_or_else(|| {
+            ModelError::Configuration("this scripted provider does not elide".into())
+        })
     }
 
     fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream> {
@@ -224,4 +250,22 @@ impl ToolRuntime for EchoTool {
     fn execute(&self, _call: &ToolCall) -> ToolFuture<'_> {
         Box::pin(async move { Ok(ToolOutput::success(self.name)) })
     }
+}
+
+/// A turn that reports usage, so the budget has something to read.
+pub fn usage_turn(input_tokens: u64, text: &str) -> Turn {
+    Turn::Events(vec![
+        ModelEvent::TextDelta { text: text.into() },
+        ModelEvent::Usage {
+            usage: gyr_protocol::TokenUsage {
+                input_tokens,
+                cached_input_tokens: 0,
+                output_tokens: 4,
+                reasoning_tokens: 0,
+            },
+        },
+        ModelEvent::Finished {
+            reason: StopReason::EndTurn,
+        },
+    ])
 }

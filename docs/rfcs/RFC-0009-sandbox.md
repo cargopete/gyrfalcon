@@ -127,7 +127,8 @@ the approval prompt as `unconfined`, and is written into the session log's
 opening record. A person running unconfined should be able to tell from the log
 that they did.
 
-Windows is not addressed, per RFC-0001 section 8.
+Windows is not a target, per RFC-0001 section 8. That is a decision rather than
+a backlog entry, so nothing here is written to leave room for it.
 
 ### 5.1 Linux: three decisions, taken 2026-08-27
 
@@ -299,8 +300,9 @@ command and the containment, the session log's opening record carries
 `workspace (seatbelt: writes confined, network denied)`, and the model receives
 576 bytes naming `E0308`.
 
-Windows has no implementation and therefore no test beyond the one that proves
-it refuses. That is a gap, not a passing grade.
+Every platform that is neither macOS nor Linux refuses, and the test that proves
+it refuses is the only one there is. That is the intended end state rather than
+a gap.
 
 **Observed on 2026-08-27** while designing the profile, using `sandbox-exec`
 directly rather than through Gyrfalcon:

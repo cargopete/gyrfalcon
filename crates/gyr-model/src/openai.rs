@@ -567,6 +567,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn openai_says_it_cannot_elide_rather_than_appearing_to() {
+        let profile = crate::builtin_profile("terra").unwrap();
+        let mut session = OpenAiSession::new(OpenAiConfig::new("key", profile)).unwrap();
+
+        let error = session.elide_tool_results(4).unwrap_err();
+
+        // It continues with previous_response_id and keeps no local history to
+        // reduce. Returning a successful no-op would let a caller believe the
+        // window had been reclaimed when nothing had happened.
+        assert!(
+            error.to_string().contains("no local history"),
+            "said: {error}"
+        );
+    }
+
+    #[test]
     fn request_repeats_instructions_and_correlates_tool_outputs() {
         let profile = crate::builtin_profile("terra").unwrap();
         let mut config = OpenAiConfig::new("test-key", profile);

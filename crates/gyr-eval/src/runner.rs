@@ -154,6 +154,7 @@ pub async fn run_case(
         tools,
         AgentConfig {
             max_model_turns: turns,
+            ..AgentConfig::default()
         },
     )
     .with_policy(AllowAll)

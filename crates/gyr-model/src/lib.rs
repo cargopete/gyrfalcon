@@ -33,6 +33,48 @@ pub trait ModelSession: Send {
     fn profile(&self) -> &ModelProfile;
 
     fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream>;
+
+    /// Hollows out the oldest tool results, keeping the most recent intact.
+    ///
+    /// The adapter owns its native history, so the adapter does the work; the
+    /// core decides when and how much. What is removed is the *content* of a
+    /// result, not the call or the assistant text around it, and what replaces
+    /// it says so. A tool result silently becoming empty would be absent data
+    /// rendering as healthy state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::Configuration`] where the provider keeps no local
+    /// history to reduce. The default is that error rather than a silent
+    /// success, so a provider that cannot do this cannot appear to have.
+    fn elide_tool_results(&mut self, keep_recent: usize) -> Result<Elision, ModelError> {
+        let _ = keep_recent;
+        Err(ModelError::Configuration(
+            "this provider keeps no local history to elide".into(),
+        ))
+    }
+}
+
+/// Below this, a result is left alone: replacing it would reclaim nothing and
+/// would lose information for no gain.
+pub(crate) const ELIDED_MARKER_FLOOR: usize = 160;
+
+/// What replaces an elided tool result.
+///
+/// It names what happened and how much went, so the model can ask again rather
+/// than conclude the file was empty.
+pub(crate) fn elided_marker(bytes: usize) -> String {
+    format!(
+        "[gyrfalcon elided {bytes} bytes of this earlier tool result to stay within the context \
+         window. Run the tool again if you need it.]"
+    )
+}
+
+/// What one elision actually removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Elision {
+    pub results_elided: usize,
+    pub bytes_reclaimed: usize,
 }
 
 /// Lets a frontend hold one boxed session whatever provider it selected.
@@ -43,6 +85,10 @@ impl ModelSession for Box<dyn ModelSession> {
 
     fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream> {
         (**self).next(input)
+    }
+
+    fn elide_tool_results(&mut self, keep_recent: usize) -> Result<Elision, ModelError> {
+        (**self).elide_tool_results(keep_recent)
     }
 }
 

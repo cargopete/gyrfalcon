@@ -171,6 +171,35 @@ impl EventSink for Renderer {
                     &format!("  › {}\n", describe_call(call)),
                 ))
             }
+            AgentEvent::ContextWarning {
+                input_tokens,
+                window_tokens,
+                ..
+            } => {
+                self.break_stream()?;
+                let percent = (*input_tokens * 100) / u64::from(*window_tokens).max(1);
+                write_out(&style::paint(
+                    WARN,
+                    &format!(
+                        "  the context window is {percent}% full ({input_tokens} of \
+                         {window_tokens}); a new session starts clean\n"
+                    ),
+                ))
+            }
+            AgentEvent::Elided {
+                results_elided,
+                bytes_reclaimed,
+                ..
+            } => {
+                self.break_stream()?;
+                write_out(&style::paint(
+                    FAINT,
+                    &format!(
+                        "  elided {results_elided} earlier tool result(s), \
+                         {bytes_reclaimed} bytes, to stay inside the window\n"
+                    ),
+                ))
+            }
             AgentEvent::ToolFinished { result, .. } => {
                 let (colour, summary) = if result.output.is_error {
                     (

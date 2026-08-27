@@ -99,7 +99,7 @@ the original permissions, flushed with `sync_all`, then renamed over the
 target. A failed replacement attempts to remove its temporary file. The parent
 directory is not yet synchronised, so the current guarantee is atomic visibility
 on supported local filesystems, not crash durability across sudden power loss.
-Windows replacement semantics are not claimed by the macOS and Linux MVP.
+Windows replacement semantics are not claimed, and Windows is not a target.
 
 The result reports before and after SHA-256 values and final byte length. It
 does not manufacture a successful edit when the replacement is absent,

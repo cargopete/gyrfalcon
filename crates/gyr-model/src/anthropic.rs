@@ -22,10 +22,13 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
+use crate::ELIDED_MARKER_FLOOR;
+use crate::Elision;
 use crate::ModelError;
 use crate::ModelEventStream;
 use crate::ModelFuture;
 use crate::ModelSession;
+use crate::elided_marker;
 use crate::sse::SseDecoder;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -173,6 +176,41 @@ impl AnthropicSession {
 impl ModelSession for AnthropicSession {
     fn profile(&self) -> &ModelProfile {
         &self.config.profile
+    }
+
+    fn elide_tool_results(&mut self, keep_recent: usize) -> Result<Elision, ModelError> {
+        let mut history = self
+            .history
+            .lock()
+            .map_err(|_| ModelError::Protocol("Anthropic history lock was poisoned".into()))?;
+
+        // Newest first, so the count of results kept is a count of the most
+        // recent ones rather than of whichever came first.
+        let mut seen = 0_usize;
+        let mut elision = Elision::default();
+        for message in history.iter_mut().rev() {
+            for block in &mut message.content {
+                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                    continue;
+                }
+                seen += 1;
+                if seen <= keep_recent {
+                    continue;
+                }
+                let Some(content) = block.get("content").and_then(Value::as_str) else {
+                    continue;
+                };
+                let bytes = content.len();
+                if bytes <= ELIDED_MARKER_FLOOR {
+                    continue;
+                }
+                let replacement = elided_marker(bytes);
+                elision.bytes_reclaimed += bytes.saturating_sub(replacement.len());
+                elision.results_elided += 1;
+                block["content"] = json!(replacement);
+            }
+        }
+        Ok(elision)
     }
 
     fn next(&mut self, input: TurnInput) -> ModelFuture<'_, ModelEventStream> {
@@ -859,6 +897,77 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn elision_hollows_the_oldest_results_and_keeps_the_recent_ones() {
+        let profile = crate::builtin_profile("claude-opus").unwrap();
+        let mut session = AnthropicSession::new(AnthropicConfig::new("key", profile)).unwrap();
+        {
+            let mut history = session.history.lock().unwrap();
+            for index in 0..4 {
+                history.push(AnthropicMessage {
+                    role: "user",
+                    content: vec![json!({
+                        "type": "tool_result",
+                        "tool_use_id": format!("call-{index}"),
+                        "content": "x".repeat(1_000),
+                        "is_error": false,
+                    })],
+                });
+            }
+        }
+
+        let elision = session.elide_tool_results(2).unwrap();
+
+        let history = session.history.lock().unwrap();
+        assert_eq!(elision.results_elided, 2);
+        assert!(elision.bytes_reclaimed > 1_500);
+        // The two oldest are hollowed and the two newest are untouched.
+        for (index, message) in history.iter().enumerate() {
+            let content = message.content[0]["content"].as_str().unwrap();
+            if index < 2 {
+                assert!(
+                    content.starts_with("[gyrfalcon elided"),
+                    "{index}: {content}"
+                );
+            } else {
+                assert_eq!(content.len(), 1_000, "{index}");
+            }
+            // Whatever else changed, the provider still needs a result for
+            // every call it issued, matched by ID.
+            assert_eq!(
+                message.content[0]["tool_use_id"].as_str().unwrap(),
+                format!("call-{index}")
+            );
+        }
+    }
+
+    #[test]
+    fn elision_leaves_a_short_result_alone() {
+        let profile = crate::builtin_profile("claude-opus").unwrap();
+        let mut session = AnthropicSession::new(AnthropicConfig::new("key", profile)).unwrap();
+        session.history.lock().unwrap().push(AnthropicMessage {
+            role: "user",
+            content: vec![json!({
+                "type": "tool_result",
+                "tool_use_id": "call-1",
+                "content": "ok",
+                "is_error": false,
+            })],
+        });
+
+        let elision = session.elide_tool_results(0).unwrap();
+
+        // Replacing two bytes with a sentence reclaims nothing and loses the
+        // only thing it had.
+        assert_eq!(elision.results_elided, 0);
+        assert_eq!(
+            session.history.lock().unwrap()[0].content[0]["content"]
+                .as_str()
+                .unwrap(),
+            "ok"
+        );
+    }
 
     #[test]
     fn request_places_tool_results_in_an_immediate_user_message() {

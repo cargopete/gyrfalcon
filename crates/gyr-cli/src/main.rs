@@ -309,6 +309,7 @@ fn prepare(common: &CommonArgs) -> Result<Prepared> {
         tools,
         AgentConfig {
             max_model_turns: settings.max_turns,
+            ..AgentConfig::default()
         },
     )
     .with_policy(policy(settings.mode, &sandbox_label))

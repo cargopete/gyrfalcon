@@ -142,12 +142,27 @@ impl ToolError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentConfig {
     pub max_model_turns: NonZeroU32,
+    /// Percentage of the documented window past which a person is told.
+    ///
+    /// A percentage rather than a fraction, because that is what a person
+    /// setting it would write, and because integer arithmetic against a token
+    /// count needs no casting to get wrong.
+    pub warn_at_percent: u8,
+    /// Percentage past which history is reduced.
+    pub elide_at_percent: u8,
+    /// Tool results kept intact when reducing.
+    pub keep_recent_results: usize,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_model_turns: NonZeroU32::new(32).expect("32 is non-zero"),
+            // Guesses, and fields rather than constants so they can be wrong
+            // cheaply.
+            warn_at_percent: 70,
+            elide_at_percent: 85,
+            keep_recent_results: 8,
         }
     }
 }
@@ -263,6 +278,11 @@ where
         let mut events = Vec::new();
         let mut text = String::new();
         let mut seen_call_ids = HashSet::new();
+        // A window has one documented size or none. Without one, none of this
+        // runs: guessing a window and cutting history against the guess would
+        // be worse than an honest refusal later.
+        let window = self.session.profile().context_window_tokens;
+        let mut warned = false;
 
         for model_turn in 1..=self.config.max_model_turns.get() {
             if cancel.is_cancelled() {
@@ -303,6 +323,10 @@ where
                 }
 
                 self.emit(AgentEvent::Model { model_turn, event }, &mut events)?;
+            }
+
+            if let Some(window) = window {
+                self.mind_the_budget(model_turn, window, &mut warned, &mut events)?;
             }
 
             let stop_reason = stop_reason.ok_or(AgentError::StreamEndedWithoutFinish)?;
@@ -348,6 +372,57 @@ where
         Err(AgentError::ModelTurnLimit(
             self.config.max_model_turns.get(),
         ))
+    }
+
+    /// Warns once as the window fills, and reduces history past a higher mark.
+    ///
+    /// The measure is the input tokens the provider reported for the request
+    /// just made, which describes the history that produced it. It lags by one
+    /// turn: a single enormous tool result can cross both marks at once and be
+    /// refused before either fires. That is a mitigation, not a guarantee, and
+    /// fixing it needs a local tokeniser Gyrfalcon does not have.
+    fn mind_the_budget(
+        &mut self,
+        model_turn: u32,
+        window: u32,
+        warned: &mut bool,
+        events: &mut Vec<AgentEvent>,
+    ) -> Result<(), AgentError> {
+        let used = last_input_tokens(events);
+        let filled = |percent: u8| u64::from(window) * u64::from(percent.min(100)) / 100;
+
+        if !*warned && used >= filled(self.config.warn_at_percent) {
+            *warned = true;
+            self.emit(
+                AgentEvent::ContextWarning {
+                    model_turn,
+                    input_tokens: used,
+                    window_tokens: window,
+                },
+                events,
+            )?;
+        }
+
+        if used < filled(self.config.elide_at_percent) {
+            return Ok(());
+        }
+        match self
+            .session
+            .elide_tool_results(self.config.keep_recent_results)
+        {
+            Ok(elision) if elision.results_elided > 0 => self.emit(
+                AgentEvent::Elided {
+                    model_turn,
+                    results_elided: elision.results_elided,
+                    bytes_reclaimed: elision.bytes_reclaimed,
+                },
+                events,
+            ),
+            // Nothing to reduce, or a provider that cannot. Neither fails the
+            // run: the warning has already been given, and the wall, if it
+            // comes, arrives in the provider's own words.
+            Ok(_) | Err(_) => Ok(()),
+        }
     }
 
     /// Classifies, decides and, where permitted, executes one tool call.
@@ -455,6 +530,21 @@ where
         events.push(event);
         Ok(())
     }
+}
+
+/// The most recent usage the provider reported, or zero if it has reported none.
+fn last_input_tokens(events: &[AgentEvent]) -> u64 {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            AgentEvent::Model {
+                event: ModelEvent::Usage { usage },
+                ..
+            } => Some(usage.input_tokens),
+            _ => None,
+        })
+        .unwrap_or(0)
 }
 
 fn cancelled(events: Vec<AgentEvent>, text: String, model_turns: u32) -> RunResult {

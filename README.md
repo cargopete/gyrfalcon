@@ -48,6 +48,13 @@ CI and evals.
   session rule is keyed on the tool and the resolved target, never on a
   description of what a command probably does. A refusal returns to the model as
   an ordinary tool result under its original call ID.
+- **A context budget.** A session used to grow its history until the provider
+  refused the request, and then keep refusing, without saying why. It now
+  watches the reported input tokens against the model's documented window, tells
+  you once at 70%, and past 85% hollows out the oldest tool results — keeping the
+  calls, the text, and every call ID — with a marker saying what went and how
+  much. Elision, not summarisation: no extra model request, deterministic, and
+  it does not quietly rewrite what the model believes happened.
 - **A session log.** Append-only JSONL holding the proposed action, the
   decision, the execution and the result, plus the model, workspace, approval
   mode and containment in force.
@@ -98,10 +105,11 @@ simply refuses everything.
 
 ### What does not exist yet
 
-A sandbox on Windows. Shells and pipelines. Rollback: the gate refuses
+Shells and pipelines. Rollback: the gate refuses
 rather than reverting, because a shadow copy of the workspace is a worse version
-of git. Conversation state across process restarts. Log replay. Compaction. A
-configuration file.
+of git. Summarising compaction, and any context relief at all for OpenAI, whose
+server-side continuation keeps no local history to reduce. Conversation state
+across process restarts. Log replay. A configuration file.
 
 The eval corpus is eight cases long, which is a start rather than a corpus. All
 eight pass against `claude-sonnet-5`, the six-case sweep costing about
@@ -254,6 +262,7 @@ The command is `gyr`; Gyrfalcon is the project.
 - [RFC-0010: Process execution](docs/rfcs/RFC-0010-exec.md)
 - [RFC-0011: The Rust diagnostic gate](docs/rfcs/RFC-0011-diagnostic-gate.md)
 - [RFC-0012: The eval corpus and harness](docs/rfcs/RFC-0012-eval-harness.md)
+- [RFC-0013: The context budget](docs/rfcs/RFC-0013-context-budget.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed in
 source, documented by a provider, or inferred. Quantitative claims carry a date
