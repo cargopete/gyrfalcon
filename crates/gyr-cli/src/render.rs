@@ -1,11 +1,15 @@
 //! Renders agent events to a terminal.
 //!
-//! The renderer is an [`EventSink`] and holds no agent state, so the interface
-//! planned in RFC-0007 can be a second renderer over the same events rather
-//! than a rewrite of the loop.
+//! The renderer is an [`EventSink`] and holds no agent state, so the session in
+//! RFC-0007 is the same renderer driven repeatedly rather than a second one.
+//!
+//! Colour follows the house rule: if a shell printed it, it is slate; if a
+//! person wrote it, it is terracotta.
 
 use std::io::Write;
 use std::io::stdout;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use gyr_core::session::EventSink;
 use gyr_core::session::RunOutcome;
@@ -20,19 +24,25 @@ use gyr_protocol::ToolCall;
 use serde_json::Value;
 
 use crate::style;
-use crate::style::AMBER;
-use crate::style::BOLD;
-use crate::style::DIM;
+use crate::style::FAINT;
 use crate::style::ITALIC;
+use crate::style::MUTED;
+use crate::style::OK;
 use crate::style::RUST;
 use crate::style::SLATE;
+use crate::style::TEXT;
+use crate::style::WARN;
 
 const MAX_SUMMARY_BYTES: usize = 120;
 
 pub struct Renderer {
     show_reasoning: bool,
     stream: Stream,
-    usage: TokenUsage,
+    /// Accumulated across every submission, because a session's cost is the
+    /// question a person actually has. Shared so `/status` can read the same
+    /// number the turn summary prints, rather than keeping a second tally that
+    /// could disagree with it.
+    usage: Arc<Mutex<TokenUsage>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,11 +58,17 @@ impl Renderer {
         Self {
             show_reasoning,
             stream: Stream::Idle,
-            usage: TokenUsage::default(),
+            usage: Arc::new(Mutex::new(TokenUsage::default())),
         }
     }
 
-    /// Closes any open streaming line before printing a structured line.
+    /// A handle on the running total, for `/status`.
+    #[must_use]
+    pub fn usage_handle(&self) -> Arc<Mutex<TokenUsage>> {
+        Arc::clone(&self.usage)
+    }
+
+    /// Closes any open streaming line before printing a structured one.
     fn break_stream(&mut self) -> Result<(), SinkError> {
         if self.stream == Stream::Idle {
             return Ok(());
@@ -69,8 +85,8 @@ impl Renderer {
             self.stream = kind;
         }
         let painted = match kind {
-            Stream::Reasoning => style::paint(&[DIM, ITALIC], delta),
-            _ => delta.to_owned(),
+            Stream::Reasoning => style::paint_with(FAINT, &[ITALIC], delta),
+            _ => style::paint(TEXT, delta),
         };
         write_out(&painted)
     }
@@ -82,15 +98,19 @@ impl Renderer {
                 self.stream_delta(Stream::Reasoning, text)
             }
             ModelEvent::Usage { usage } => {
-                self.usage = *usage;
+                if let Ok(mut total) = self.usage.lock() {
+                    total.input_tokens += usage.input_tokens;
+                    total.cached_input_tokens += usage.cached_input_tokens;
+                    total.output_tokens += usage.output_tokens;
+                    total.reasoning_tokens += usage.reasoning_tokens;
+                }
                 Ok(())
             }
             ModelEvent::Finished { reason } => {
                 self.break_stream()?;
                 if !matches!(reason, StopReason::EndTurn | StopReason::ToolUse) {
                     let line = format!("  the model stopped: {}\n", stop_reason_label(*reason));
-                    let painted = style::paint(&[AMBER], &line);
-                    write_out(&painted)?;
+                    write_out(&style::paint(WARN, &line))?;
                 }
                 Ok(())
             }
@@ -99,6 +119,36 @@ impl Renderer {
             | ModelEvent::ToolCallStarted { .. }
             | ModelEvent::ToolCallArgumentsDelta { .. }
             | ModelEvent::ToolCallCompleted { .. } => Ok(()),
+        }
+    }
+
+    fn decision(
+        &mut self,
+        tool: &str,
+        subject: Option<&str>,
+        decision: &ApprovalDecision,
+    ) -> Result<(), SinkError> {
+        let subject = subject.unwrap_or(tool);
+        match decision {
+            // A person decided this, so a person's colour carries it.
+            ApprovalDecision::Denied { reason } => {
+                self.break_stream()?;
+                write_out(&style::paint(RUST, &format!("  refused  {subject}\n")))?;
+                write_out(&style::paint(FAINT, &format!("           {reason}\n")))
+            }
+            // A person answering the prompt has already seen it, and an
+            // auto-allowed read needs no announcement. A standing rule being
+            // spent is the one case worth showing.
+            ApprovalDecision::Allowed {
+                source: DecisionSource::SessionRule,
+            } => {
+                self.break_stream()?;
+                write_out(&style::paint(
+                    FAINT,
+                    &format!("  allowed  {subject}  by session rule\n"),
+                ))
+            }
+            ApprovalDecision::Allowed { .. } => Ok(()),
         }
     }
 }
@@ -112,78 +162,89 @@ impl EventSink for Renderer {
                 action,
                 decision,
                 ..
-            } => {
-                let subject = action.subject.as_deref().unwrap_or(tool.as_str());
-                match decision {
-                    ApprovalDecision::Denied { reason } => {
-                        self.break_stream()?;
-                        let line = format!("  refused  {subject}  {reason}\n");
-                        let painted = style::paint(&[RUST], &line);
-                        write_out(&painted)
-                    }
-                    // A person answering the prompt has already seen it, and an
-                    // auto-allowed read needs no announcement. A standing rule
-                    // being spent is the one case worth showing.
-                    ApprovalDecision::Allowed {
-                        source: source @ DecisionSource::SessionRule,
-                    } => {
-                        self.break_stream()?;
-                        let line = format!(
-                            "  allowed  {subject}  by {}\n",
-                            decision_source_label(*source)
-                        );
-                        let painted = style::paint(&[DIM], &line);
-                        write_out(&painted)
-                    }
-                    ApprovalDecision::Allowed { .. } => Ok(()),
-                }
-            }
+            } => self.decision(tool, action.subject.as_deref(), decision),
             AgentEvent::ToolStarted { call, .. } => {
                 self.break_stream()?;
-                let line = format!("  {}  {}\n", tool_marker(), describe_call(call));
-                let painted = style::paint(&[SLATE], &line);
-                write_out(&painted)
+                // The machine is about to do something, so the machine's colour.
+                write_out(&style::paint(
+                    SLATE,
+                    &format!("  › {}\n", describe_call(call)),
+                ))
             }
             AgentEvent::ToolFinished { result, .. } => {
-                let summary = if result.output.is_error {
-                    format!(
-                        "    {}\n",
-                        cap(first_line(&result.output.content), MAX_SUMMARY_BYTES)
+                let (colour, summary) = if result.output.is_error {
+                    (
+                        WARN,
+                        format!(
+                            "    {}\n",
+                            cap(first_line(&result.output.content), MAX_SUMMARY_BYTES)
+                        ),
                     )
                 } else {
-                    format!("    {} bytes\n", result.output.content.len())
+                    (
+                        FAINT,
+                        format!("    {} bytes\n", result.output.content.len()),
+                    )
                 };
-                let codes: &[&str] = if result.output.is_error {
-                    &[RUST]
-                } else {
-                    &[DIM]
-                };
-                let painted = style::paint(codes, &summary);
-                write_out(&painted)
+                write_out(&style::paint(colour, &summary))
             }
         }
     }
 
     fn finish(&mut self, outcome: &RunOutcome) -> Result<(), SinkError> {
         self.break_stream()?;
-        let usage = self.usage;
+        let usage = self
+            .usage
+            .lock()
+            .map_or_else(|_| TokenUsage::default(), |total| *total);
         let ending = match (&outcome.error, outcome.stop_reason) {
             (Some(error), _) => format!("failed: {error}"),
             (None, Some(reason)) => stop_reason_label(reason).to_owned(),
             (None, None) => "ended without a stop reason".to_owned(),
         };
-        let line = format!(
-            "\n{}  {ending} · {} model turn(s) · {} in ({} cached), {} out, {} reasoning\n",
-            style::paint(&[BOLD], "─"),
-            outcome.model_turns,
-            usage.input_tokens,
-            usage.cached_input_tokens,
-            usage.output_tokens,
-            usage.reasoning_tokens,
+        // One green word per submission, and only when it genuinely finished.
+        // Motion and status colour are spent, not sprinkled.
+        let painted_ending = match (&outcome.error, outcome.stop_reason) {
+            (Some(_), _) => style::paint(WARN, &ending),
+            (None, Some(StopReason::EndTurn)) => style::paint(OK, &ending),
+            _ => style::paint(FAINT, &ending),
+        };
+        let tail = style::paint(
+            FAINT,
+            &format!(
+                " · {} model turn(s) · {}\n",
+                outcome.model_turns,
+                describe_usage(usage)
+            ),
         );
-        let painted = style::paint(&[DIM], &line);
-        write_out(&painted)
+        write_out(&format!("\n  {painted_ending}{tail}"))
     }
+}
+
+/// One line of running cost, in the words the summary uses.
+#[must_use]
+pub fn describe_usage(usage: TokenUsage) -> String {
+    format!(
+        "{} in ({} cached), {} out, {} reasoning",
+        usage.input_tokens, usage.cached_input_tokens, usage.output_tokens, usage.reasoning_tokens
+    )
+}
+
+/// The session banner and `/status`, in one place so they cannot drift apart.
+#[must_use]
+pub fn status_block(rows: &[(&str, String)]) -> String {
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    rows.iter()
+        .fold(String::new(), |mut block, (label, value)| {
+            use std::fmt::Write as _;
+            let _ = writeln!(
+                &mut block,
+                "  {}  {}",
+                style::kicker(&format!("{label:<width$}")),
+                style::paint(MUTED, value)
+            );
+            block
+        })
 }
 
 fn write_out(text: &str) -> Result<(), SinkError> {
@@ -193,12 +254,9 @@ fn write_out(text: &str) -> Result<(), SinkError> {
         .map_err(|error| SinkError::new(format!("cannot write to the terminal: {error}")))
 }
 
-fn tool_marker() -> &'static str {
-    "›"
-}
-
 /// One readable line for a proposed call, built from its arguments rather than
 /// from a description the model supplied.
+#[must_use]
 pub fn describe_call(call: &ToolCall) -> String {
     let detail = match call.name.as_str() {
         "read" => argument_string(&call.arguments, "path").map(|path| {
@@ -245,15 +303,6 @@ pub fn describe_call(call: &ToolCall) -> String {
             call.name,
             cap(&call.arguments.to_string(), MAX_SUMMARY_BYTES)
         ),
-    }
-}
-
-/// A one-line description of where a decision came from.
-fn decision_source_label(source: DecisionSource) -> &'static str {
-    match source {
-        DecisionSource::Policy => "policy",
-        DecisionSource::SessionRule => "session rule",
-        DecisionSource::User => "operator",
     }
 }
 

@@ -33,6 +33,7 @@ gyr-sandbox = { path = "crates/gyr-sandbox" }
 gyr-tools = { path = "crates/gyr-tools" }
 ignore = "0.4.33"
 pretty_assertions = "1.4.1"
+rustyline = { version = "17.0.2", default-features = false, features = ["with-file-history"] }
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

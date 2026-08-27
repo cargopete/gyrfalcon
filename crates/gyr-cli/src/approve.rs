@@ -19,9 +19,9 @@ use gyr_protocol::ToolClass;
 
 use crate::render::describe_call;
 use crate::style;
-use crate::style::AMBER;
 use crate::style::BOLD;
-use crate::style::DIM;
+use crate::style::FAINT;
+use crate::style::RUST;
 
 #[derive(Debug, Clone)]
 pub struct TerminalApprover {
@@ -68,8 +68,9 @@ fn ask_on_terminal(
     sandbox: &str,
 ) -> ApprovalReply {
     let mut err = stderr().lock();
-    let header = style::paint(&[AMBER, BOLD], "  approval");
-    let detail = style::paint(&[DIM], &format!("      rule scope: {tool} on {subject}"));
+    // The one moment a person is directly addressed.
+    let header = style::paint_with(RUST, &[BOLD], "  approval");
+    let detail = style::paint(FAINT, &format!("      rule scope: {tool} on {subject}"));
     let (always, caveat) = match class {
         ToolClass::Process => (
             "always for this exact command",
@@ -82,13 +83,13 @@ fn ask_on_terminal(
         _ => ("always for this file", None),
     };
     let question = style::paint(
-        &[DIM],
+        FAINT,
         &format!("      [y] once   [a] {always}   [n] refuse: "),
     );
     let written = writeln!(err, "\n{header}  {summary}")
         .and_then(|()| writeln!(err, "{detail}"))
         .and_then(|()| match &caveat {
-            Some(caveat) => writeln!(err, "{}", style::paint(&[DIM], caveat)),
+            Some(caveat) => writeln!(err, "{}", style::paint(FAINT, caveat)),
             None => Ok(()),
         })
         .and_then(|()| write!(err, "{question}"))

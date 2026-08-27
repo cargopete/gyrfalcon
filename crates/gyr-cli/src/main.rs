@@ -3,12 +3,14 @@
 mod approve;
 mod config;
 mod render;
+mod session;
 mod style;
 
 use std::io::IsTerminal;
 use std::io::Read;
 use std::io::stdin;
 use std::num::NonZeroU32;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -33,6 +35,7 @@ use gyr_core::session::SessionId;
 use gyr_core::session::SessionMeta;
 use gyr_exec::ExecLimits;
 use gyr_exec::ExecTool;
+use gyr_model::ModelSession;
 use gyr_model::builtin_profiles;
 use gyr_protocol::ProfileStatus;
 use gyr_protocol::StopReason;
@@ -49,12 +52,21 @@ use crate::config::ApprovalMode;
 use crate::config::RunSettings;
 use crate::config::SandboxMode;
 use crate::render::Renderer;
+use crate::session::Session;
 
 #[derive(Debug, Parser)]
-#[command(name = "gyr", version, about = "A Rust-first terminal coding agent")]
+#[command(
+    name = "gyr",
+    version,
+    about = "A Rust-first terminal coding agent",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+    /// With no subcommand, these open an interactive session.
+    #[command(flatten)]
+    common: CommonArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -67,8 +79,49 @@ enum Command {
     },
     /// Print the system prompt a run would send, so its cost is inspectable.
     Prompt(PromptArgs),
-    /// Run one request against a model, with tools and approvals.
+    /// Run one request and exit. For scripts, CI and evals.
     Run(RunArgs),
+}
+
+// These are switches rather than a state machine because each one means one
+// thing to a person reading `--help`.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, clap::Args)]
+struct CommonArgs {
+    /// Model key from `gyr models`. Defaults to `GYR_MODEL`.
+    #[arg(long)]
+    model: Option<String>,
+    /// Workspace root. Defaults to the current directory.
+    #[arg(long)]
+    workspace: Option<PathBuf>,
+    /// Session log path. Defaults to .gyr/sessions/<id>.jsonl in the workspace.
+    #[arg(long)]
+    log: Option<PathBuf>,
+    /// Safety limit on model turns in one submission.
+    #[arg(long, default_value = "32")]
+    max_turns: NonZeroU32,
+    /// Refuse every mutation and every process instead of asking.
+    #[arg(long, conflicts_with = "dangerously_allow_all")]
+    read_only: bool,
+    /// Approve everything without asking. Consider this carefully.
+    #[arg(long)]
+    dangerously_allow_all: bool,
+    /// Operating-system containment for processes this run starts.
+    #[arg(long, value_enum, default_value_t = SandboxMode::Workspace)]
+    sandbox: SandboxMode,
+    /// Show streamed reasoning summaries where the provider sends them.
+    #[arg(long)]
+    show_reasoning: bool,
+    /// Never emit terminal colour.
+    #[arg(long)]
+    plain: bool,
+    /// Endpoint for a self-served model, standing in for `QWEN_API_BASE`.
+    #[arg(long)]
+    api_base: Option<String>,
+    /// Ask a toggling model not to think. Leaves the server's default alone
+    /// when absent.
+    #[arg(long)]
+    no_thinking: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -84,48 +137,12 @@ struct PromptArgs {
     sandbox: SandboxMode,
 }
 
-// Four independent switches, each meaning one thing to a person reading
-// `--help`. Folding them into a state machine would serve the lint and nobody
-// else.
-#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, clap::Args)]
 struct RunArgs {
     /// The request. Read from standard input when omitted.
     prompt: Option<String>,
-    /// Model key from `gyr models`. Defaults to `GYR_MODEL`.
-    #[arg(long)]
-    model: Option<String>,
-    /// Workspace root. Defaults to the current directory.
-    #[arg(long)]
-    workspace: Option<PathBuf>,
-    /// Session log path. Defaults to .gyr/sessions/<id>.jsonl in the workspace.
-    #[arg(long)]
-    log: Option<PathBuf>,
-    /// Safety limit on model turns in one run.
-    #[arg(long, default_value = "32")]
-    max_turns: NonZeroU32,
-    /// Refuse every mutation instead of asking.
-    #[arg(long, conflicts_with = "dangerously_allow_all")]
-    read_only: bool,
-    /// Approve everything without asking. Consider this carefully.
-    #[arg(long)]
-    dangerously_allow_all: bool,
-    /// Show streamed reasoning summaries where the provider sends them.
-    #[arg(long)]
-    show_reasoning: bool,
-    /// Never emit terminal colour.
-    #[arg(long)]
-    plain: bool,
-    /// Operating-system containment for processes this run starts.
-    #[arg(long, value_enum, default_value_t = SandboxMode::Workspace)]
-    sandbox: SandboxMode,
-    /// Endpoint for a self-served model, standing in for `QWEN_API_BASE`.
-    #[arg(long)]
-    api_base: Option<String>,
-    /// Ask a toggling model not to think. Leaves the server's default alone
-    /// when absent.
-    #[arg(long)]
-    no_thinking: bool,
+    #[command(flatten)]
+    common: CommonArgs,
 }
 
 fn main() -> ExitCode {
@@ -139,23 +156,30 @@ fn main() -> ExitCode {
 }
 
 fn dispatch() -> Result<ExitCode> {
-    match Cli::parse().command {
-        Command::Models { json } => {
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Command::Models { json }) => {
             list_models(json)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Prompt(args) => {
+        Some(Command::Prompt(args)) => {
             print_prompt(&args)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Run(args) => {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .context("cannot start the async runtime")?;
-            runtime.block_on(run(args))
-        }
+        Some(Command::Run(args)) => on_runtime(run(args)),
+        None => on_runtime(session(cli.common)),
     }
+}
+
+fn on_runtime<F>(future: F) -> Result<ExitCode>
+where
+    F: Future<Output = Result<ExitCode>>,
+{
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?
+        .block_on(future)
 }
 
 fn list_models(json: bool) -> Result<()> {
@@ -199,15 +223,17 @@ fn print_prompt(args: &PromptArgs) -> Result<()> {
 /// The Cargo tool is present only where a manifest is, so a workspace that is
 /// not a Cargo project simply has fewer tools rather than one that fails on
 /// every call.
-fn tool_set(workspace: &std::path::Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet> {
-    let mut runtimes: Vec<Box<dyn ToolRuntime>> = vec![Box::new(
-        WorkspaceTools::new(workspace, ToolLimits::default())
-            .map_err(|error| anyhow::anyhow!("{error}"))?,
-    )];
-    runtimes.push(Box::new(
-        ExecTool::new(workspace, ExecLimits::default(), Arc::clone(&sandbox))
-            .map_err(|error| anyhow::anyhow!("{error}"))?,
-    ));
+fn tool_set(workspace: &Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet> {
+    let mut runtimes: Vec<Box<dyn ToolRuntime>> = vec![
+        Box::new(
+            WorkspaceTools::new(workspace, ToolLimits::default())
+                .map_err(|error| anyhow::anyhow!("{error}"))?,
+        ),
+        Box::new(
+            ExecTool::new(workspace, ExecLimits::default(), Arc::clone(&sandbox))
+                .map_err(|error| anyhow::anyhow!("{error}"))?,
+        ),
+    ];
     if workspace.join("Cargo.toml").is_file() {
         runtimes.push(Box::new(
             CargoTool::new(workspace, CargoLimits::default(), sandbox)
@@ -218,7 +244,7 @@ fn tool_set(workspace: &std::path::Path, sandbox: Arc<dyn Sandbox>) -> Result<To
 }
 
 fn prompt_context(
-    workspace: &std::path::Path,
+    workspace: &Path,
     mode: ApprovalMode,
     definitions: &[ToolDefinition],
 ) -> PromptContext {
@@ -232,18 +258,26 @@ fn prompt_context(
     }
 }
 
-async fn run(args: RunArgs) -> Result<ExitCode> {
-    style::enable(args.plain);
+/// Everything a submission needs, assembled once.
+struct Prepared {
+    agent: Agent<Box<dyn ModelSession>, ToolSet>,
+    usage: std::sync::Arc<std::sync::Mutex<gyr_protocol::TokenUsage>>,
+    settings: RunSettings,
+    sandbox_label: String,
+    session_id: SessionId,
+}
+
+fn prepare(common: &CommonArgs) -> Result<Prepared> {
+    style::enable(common.plain);
     let session_id = SessionId::generate();
-    let settings = settings(&args, &session_id)?;
-    let request = request_text(args.prompt)?;
+    let settings = settings(common, &session_id)?;
 
     let sandbox = config::build_sandbox(settings.sandbox, &settings.workspace)?;
     let sandbox_label = sandbox.label();
     let tools = tool_set(&settings.workspace, Arc::clone(&sandbox))?;
     let definitions = tools.definitions();
     let context = prompt_context(&settings.workspace, settings.mode, &definitions);
-    let session = config::build_session(&settings, system_prompt(&context), definitions)?;
+    let model = config::build_session(&settings, system_prompt(&context), definitions)?;
 
     let log = JsonlSessionLog::create(
         &settings.log_path,
@@ -258,28 +292,61 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
             max_model_turns: settings.max_turns.get(),
         },
     )?;
-    eprintln!(
-        "{}",
-        style::paint(
-            &[style::DIM],
-            &format!(
-                "{} · {} · {sandbox_label} · log {}",
-                settings.profile.display_name,
-                settings.mode.label(),
-                settings.log_path.display()
-            )
-        )
-    );
 
-    let mut agent = Agent::new(
-        session,
+    let renderer = Renderer::new(settings.show_reasoning);
+    let usage = renderer.usage_handle();
+    let agent = Agent::new(
+        model,
         tools,
         AgentConfig {
             max_model_turns: settings.max_turns,
         },
     )
     .with_policy(policy(settings.mode, &sandbox_label))
-    .with_sink((Renderer::new(settings.show_reasoning), log));
+    .with_sink((renderer, log));
+
+    Ok(Prepared {
+        agent,
+        usage,
+        settings,
+        sandbox_label,
+        session_id,
+    })
+}
+
+async fn session(common: CommonArgs) -> Result<ExitCode> {
+    let prepared = prepare(&common)?;
+    let mut session = Session {
+        agent: prepared.agent,
+        usage: prepared.usage,
+        model: prepared.settings.profile.display_name.clone(),
+        workspace: prepared.settings.workspace.display().to_string(),
+        sandbox: prepared.sandbox_label,
+        approvals: prepared.settings.mode.label().to_owned(),
+        log_path: prepared.settings.log_path.display().to_string(),
+        history_path: prepared.settings.workspace.join(".gyr").join("history"),
+    };
+    let _ = prepared.session_id;
+    session.run().await?;
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn run(args: RunArgs) -> Result<ExitCode> {
+    let mut prepared = prepare(&args.common)?;
+    let request = request_text(args.prompt)?;
+    eprintln!(
+        "{}",
+        style::paint(
+            style::FAINT,
+            &format!(
+                "{} · {} · {} · log {}",
+                prepared.settings.profile.display_name,
+                prepared.settings.mode.label(),
+                prepared.sandbox_label,
+                prepared.settings.log_path.display()
+            )
+        )
+    );
 
     let cancel = CancellationToken::new();
     let signal = cancel.clone();
@@ -289,7 +356,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
         }
     });
 
-    let result = agent.run_cancellable(request, &cancel).await?;
+    let result = prepared.agent.run_cancellable(request, &cancel).await?;
     Ok(match result.stop_reason {
         StopReason::EndTurn => ExitCode::SUCCESS,
         StopReason::Cancelled => ExitCode::from(130),
@@ -297,7 +364,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     })
 }
 
-fn settings(args: &RunArgs, session_id: &SessionId) -> Result<RunSettings> {
+fn settings(args: &CommonArgs, session_id: &SessionId) -> Result<RunSettings> {
     let profile = config::resolve_profile(args.model.as_deref())?;
     let workspace = config::resolve_workspace(args.workspace.as_deref())?;
     let mode = if args.dangerously_allow_all {
@@ -337,7 +404,7 @@ fn request_text(argument: Option<String>) -> Result<String> {
         return Ok(text);
     }
     if stdin().is_terminal() {
-        bail!("no request given: pass one as an argument or pipe it on standard input");
+        bail!("no request given: pass one as an argument, pipe it in, or run `gyr` for a session");
     }
     let mut text = String::new();
     stdin()

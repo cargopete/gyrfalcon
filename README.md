@@ -11,11 +11,15 @@ and its measurements.
 
 ## Status
 
-`gyr run` is a working one-shot agent. It selects a model, builds a
-provider-native session, streams a turn, classifies every tool call, enforces an
-approval policy in code, runs processes inside an operating-system sandbox,
-records every proposed action and decision to an append-only log, and stops on
-Ctrl-C without inventing a terminal event the provider never sent.
+`gyr` opens an interactive session. It selects a model, builds a provider-native
+session, streams each turn, classifies every tool call, enforces an approval
+policy in code, runs processes inside an operating-system sandbox, records every
+proposed action and decision to an append-only log, and cancels a turn on Ctrl-C
+without inventing a terminal event the provider never sent or losing the
+conversation.
+
+`gyr run` is the same machinery as one submission and an exit code, for scripts,
+CI and evals.
 
 ### What works
 
@@ -37,6 +41,9 @@ Ctrl-C without inventing a terminal event the provider never sent.
 - **A session log.** Append-only JSONL holding the proposed action, the
   decision, the execution and the result, plus the model, workspace, approval
   mode and containment in force.
+- **A line-based interface.** Not an alternate-screen one, deliberately: the
+  transcript belongs in the terminal's scrollback, where a person goes to find
+  what the agent did an hour ago and where selection and copying still work.
 
 ### What is enforced, and what is not
 
@@ -61,13 +68,11 @@ remains available, is never the default, appears in the approval prompt as
 ### What does not exist yet
 
 A sandbox on Linux or Windows. Shells and pipelines. The Rust diagnostic gate
-that tracks a diagnostic set across an edit batch. An interactive terminal
-interface. Conversation state across invocations. Log replay. Compaction. A
-configuration file.
+that tracks a diagnostic set across an edit batch. Conversation state across
+process restarts. Log replay. Compaction. A configuration file.
 
 These are missing features. None of them is delegated to the system prompt, and
-none is claimed to be present. This is a usable single-shot agent and not yet a
-usable coding session.
+none is claimed to be present.
 
 ## Models
 
@@ -105,12 +110,27 @@ endpoint. A missing one fails before any request is sent, naming the variable.
 
 ```console
 export ANTHROPIC_API_KEY=...
+gyr --model claude-opus
+```
+
+That opens a session. Inside it, `/help`, `/status`, `/log` and `/exit`; Ctrl-C
+cancels the current turn and keeps the conversation; Ctrl-D leaves. History
+persists to `.gyr/history`.
+
+For a script, CI or an eval, one submission and an exit code:
+
+```console
 gyr run --model claude-opus "what does gyr-core::Agent::run guarantee?"
 ```
 
 Mutations and processes ask before they happen. `--read-only` refuses both
 instead. `--dangerously-allow-all` does not ask, which is a decision worth
-making deliberately. Every run writes `.gyr/sessions/<id>.jsonl`.
+making deliberately. Every session writes `.gyr/sessions/<id>.jsonl`.
+
+The interface uses the house palette, which assumes a warm dark terminal because
+that is what it was drawn for. Gyrfalcon ships the ink and leaves the background
+to the terminal, since a line-based program does not own its ground. On a light
+terminal, `--plain`.
 
 A sandboxed run has no network, so Cargo runs `--offline` and cannot fetch a
 dependency that is not already in the local registry cache. Adding a crate is a
@@ -119,8 +139,8 @@ job for a person, or for `--sandbox none`.
 Against a local endpoint:
 
 ```console
-gyr run --model qwen3-8b --api-base http://thinkpad.local:11434/v1 \
-        --no-thinking --read-only "what is in src/lib.rs?"
+gyr --model qwen3-8b --api-base http://thinkpad.local:11434/v1 \
+    --no-thinking --read-only
 ```
 
 Ollama serves a context far smaller than the model's native window unless
@@ -137,12 +157,10 @@ The command is `gyr`; Gyrfalcon is the project.
 - [RFC-0004: Local subscription model probes](docs/rfcs/RFC-0004-local-model-probes.md)
 - [RFC-0005: Workspace filesystem tools](docs/rfcs/RFC-0005-filesystem-tools.md)
 - [RFC-0006: Approvals, session log and the first interactive run](docs/rfcs/RFC-0006-approvals-and-the-first-run.md)
+- [RFC-0007: The interactive session](docs/rfcs/RFC-0007-interactive-session.md)
 - [RFC-0008: The structured Cargo tool](docs/rfcs/RFC-0008-cargo-tool.md)
 - [RFC-0009: Operating-system sandbox](docs/rfcs/RFC-0009-sandbox.md)
 - [RFC-0010: Process execution](docs/rfcs/RFC-0010-exec.md)
-
-RFC-0007 is reserved for the interactive terminal interface and is not yet
-written.
 
 The RFCs are part of the project. Findings are labelled as measured, observed in
 source, documented by a provider, or inferred. Quantitative claims carry a date
@@ -168,7 +186,8 @@ Eight crates:
 - `gyr-sandbox` — operating-system containment. Rewrites a command; never spawns.
 - `gyr-exec` — the process runner and the `exec` tool.
 - `gyr-rust` — the `cargo` tool and diagnostic parsing.
-- `gyr-cli` — the `gyr` executable, its renderer and its approval prompt.
+- `gyr-cli` — the `gyr` executable, its session loop, renderer, palette and
+  approval prompt.
 
 Tests that invoke a real `cargo` build a dependency-free fixture in a temporary
 directory, so they need a toolchain but no network. Tests that exercise the

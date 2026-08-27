@@ -199,7 +199,8 @@ chosen that retention mode.
    and fails closed rather than running unconfined. `exec` followed in RFC-0010,
    with argument vectors and no shell.
 9. Rust diagnostic gate and representative eval corpus.
-10. Interactive terminal interface.
+10. Interactive terminal interface. **Done** in RFC-0007: line-based, so the
+    transcript stays in the terminal's scrollback.
 11. ChatGPT OAuth, after the transport is independently sound.
 
 Each stage must produce a working vertical slice. A directory full of interfaces
