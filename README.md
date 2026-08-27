@@ -104,18 +104,25 @@ zero while `list` was reached for in two cases, with six of six still passing.
 A finding produced a change and the corpus confirmed the change. That loop
 closing is the point of the whole exercise.
 
-The other belief is a good deal less comfortable, and it is about a design
-decision in this repository rather than about a case in its corpus. The gate was
-called in one case of six. A harder seventh case was then written specifically
-to see whether difficulty was the missing ingredient, and the model did use the
-gate — after finishing, taking its baseline from the already-fixed code, and
-then running `cargo check` anyway. So this model reaches for the gate as a
-terminal verifier, and `cargo check` is already one. RFC-0011 built a mid-batch
-progress tracker for a model that checks as it goes.
+The second is about a design decision in this repository rather than about a
+case in its corpus, and it moved twice. The gate started out called in one case
+of six. A harder case was written to see whether difficulty was the missing
+ingredient; the model used the gate, but took its baseline *after* finishing the
+work and got a verdict that could not see it. Fixing the message that made that
+misuse easy, and the description that invited it, changed behaviour measurably:
+across four multi-edit cases the gate is now called before the first edit in two
+of them, reproducibly across two identical runs.
 
-The gate is built, correct, tested, and may be solving a problem this class of
-model does not have. RFC-0011 section 12.1 says so and lists what would settle
-it, none of which has been run.
+So the gate is called as designed about half the time it could be. What is still
+untested is whether its answer ever changes a decision: every verdict a live
+model has received has been `green` or `unchanged`, and `improving`,
+`regressing`, `stalled` and `exhausted` have never been seen outside the tests.
+RFC-0011 section 12.1 has all of it, including why the next experiment is a
+harder case rather than a louder prompt.
+
+Two identical runs also gave the corpus its first noise floor: gate usage
+identical, ±1 turn per case, 6.6% in tokens. Enough to read a tool histogram
+from a single run; not enough to read a token count.
 
 RFC-0012 sections 9.2 through 9.5 have all of it, including the first live run,
 where the thing the corpus found was a badly written case rather than anything

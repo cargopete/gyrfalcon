@@ -212,15 +212,57 @@ mid-batch. Twice now the observed behaviour has been to read everything, edit
 everything, and check once at the end, which is a strategy the gate adds nothing
 to.
 
-That is a doubt about the premise rather than about the implementation, and it
-is not settled by two observations. What would settle it, in rough order of
-cost: a system prompt that asks for a mid-batch check, measured before and
-after; a case large enough that reading everything first is not affordable; and
-a model that is worse at planning, where the red state is entered by accident
-rather than by design. None of those has been run.
+That is a doubt about the premise rather than about the implementation.
+
+### 12.1.1 Half of it turned out to be wording
+
+**Measured on 2026-08-27.** Section 12.2's fix changed the tool description from
+"Call start before editing to record a baseline" to "Call start BEFORE your
+first edit ... a baseline taken after the work cannot see that work and will
+report unchanged". The four multi-edit cases were then run twice on the fixed
+description, and compared against the single run on the old one:
+
+| case | before, 1 run | after, 2 runs |
+|---|---:|---:|
+| `rename-across-files` | 0 | 2, 2 |
+| `thread-a-result` | 2, misused | 0, 0 |
+| `fix-warnings-at-the-cause` | 2 | 2, 2 |
+| `fix-failing-test` | 0 | 0, 0 |
+
+Both cases that moved, moved the way the wording pushed, and both reproduced.
+`rename-across-files` now takes a baseline, applies three patches, and checks:
+exactly the usage section 4 designed. `thread-a-result` stopped taking a
+baseline after finishing, which was the misuse the old wording invited.
+
+One run on the old description is not a control group, so this is suggestive
+rather than established. What it does establish is that **the gate's usage is
+sensitive to how the tool describes itself, and measurably so**, which is a more
+tractable lever than a system prompt and was found by accident while fixing a
+message.
+
+Run-to-run variance on the two identical runs was ±1 turn per case and 6.6% in
+input tokens, with gate usage identical. So the metric is stable enough to read,
+which is the other thing those two runs bought.
+
+### 12.1.2 What is still in doubt
+
+Not whether the gate is called. Whether its answer ever changes anything.
+
+Every verdict a live model has received has been `green` or `unchanged`.
+`improving`, `regressing`, `stalled` and `exhausted` exist, are unit-tested
+against a real compiler, and have never been seen in a live run. The gate is
+being called at the right moments and finding nothing to report, because the
+batch was correct by the time it was asked.
+
+So the premise's second half is untested: a batch that goes red in a way the
+model has to react to. `thread-a-result` was written to be that case and was
+handled in a single pass. The next experiment is a harder case rather than a
+louder prompt, because a prompt that asks for more checks produces more calls
+and not more informative verdicts.
 
 The honest position in the meantime is that the gate is built, correct, tested,
-and may be solving a problem this class of model does not have.
+called as designed about half the time it could be, and has not yet been
+observed to change a decision.
 
 ### 12.2 A bug the same run found
 

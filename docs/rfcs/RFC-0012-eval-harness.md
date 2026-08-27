@@ -286,17 +286,45 @@ its corpus, which is what the corpus is for and is a good deal less pleasant
 than the previous four. And the case was written to confirm a hypothesis and
 refuted it instead, which is the only reason writing it was worth the money.
 
+### 9.6 Measuring the noise before measuring the signal
+
+The plan after section 9.5 was to change the system prompt to ask for a
+mid-batch gate check and measure before and after. Two things stopped it, and
+both were worth more than the experiment would have been.
+
+The first: comparing the section 9.3 and 9.5 runs, the same case used the gate
+twice in one and not at all in the other. That looked like variance large enough
+to swamp any prompt effect, which would have made an n=1 A/B unreadable. So the
+noise floor was measured first: the same four cases, the same model, the same
+configuration, twice. **Gate usage was identical across both runs** — the same
+two cases, the same two calls each, the same verdicts. Variance was ±1 turn per
+case and 6.6% in input tokens.
+
+The second: with the noise floor known, the apparent variance relocated. It was
+not run-to-run. It was the tool-description fix made an hour earlier for an
+unrelated reason. RFC-0011 section 12.1.1 has the table.
+
+The prompt experiment was then not run, and that is a result rather than an
+omission. It would have measured whether asking produces more gate calls. What
+is in doubt is whether a gate verdict ever changes a decision, and every live
+verdict so far has been `green` or `unchanged`. More calls to a tool that keeps
+answering "nothing to report" is not evidence about a tool's usefulness, and
+sixty pence spent producing a number nobody could interpret is worse than sixty
+pence unspent.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is
   tempting and is prescribing method by the back door.
 - Whether a case needs a per-case timeout distinct from its turn limit, since a
   model can spend a great deal of wall time inside one turn.
-- How many runs of a live case are needed before its pass rate means anything,
-  which is the question the corpus exists to start answering about itself.
+- How many runs of a live case are needed before a number means anything. First
+  evidence, section 9.6: two identical runs of four cases agreed exactly on tool
+  usage and varied by ±1 turn and 6.6% in tokens. That is enough to read a tool
+  histogram from one run and not enough to read a token count.
 - ~~Whether the missing capability behind the corpus's one `exec` call is a
   `list` tool.~~ Answered in section 9.4: it was.
-- Whether the system prompt should ask for a mid-batch gate check. Sections 9.3
-  and 9.5, and RFC-0011 section 12.1: the evidence now says the model uses the
-  gate as a verifier rather than a tracker, so the question is whether asking
-  changes that and whether the change is worth a compile.
+- ~~Whether the system prompt should ask for a mid-batch gate check.~~ Set aside
+  in section 9.6: it would measure the wrong thing. The open question underneath
+  it is whether a gate verdict ever changes a decision, which needs a case that
+  goes red rather than a prompt that asks more often.
