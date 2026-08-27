@@ -70,6 +70,7 @@ pub fn builtin_profiles() -> Vec<ModelProfile> {
     vec![
         terra(),
         claude_opus(),
+        claude_sonnet(),
         qwen_coder_480b(),
         qwen_coder_next(),
         qwen_coder_30b(),
@@ -116,6 +117,35 @@ fn claude_opus() -> ModelProfile {
         key: "claude-opus".into(),
         provider_model: "claude-opus-5".into(),
         display_name: "Claude Opus".into(),
+        provider: ProviderKind::Anthropic,
+        status: ProfileStatus::Supported,
+        context_window_tokens: Some(1_000_000),
+        max_output_tokens: Some(128_000),
+        reasoning: ReasoningSupport::Effort(vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+        ]),
+        parallel_tool_calls: true,
+        image_input: true,
+        tool_call_parser: None,
+        reasoning_parser: None,
+        sampling: None,
+    }
+}
+
+/// **Provider-documented, inspected 2026-08-27:** `claude-sonnet-5` has a
+/// 1,000,000-token context window, supports up to 128,000 output tokens, takes
+/// `thinking: {type: "adaptive"}` as its only on-mode, and accepts every effort
+/// level from low through max. It is priced below Opus, which is why a person
+/// watching the bill reaches for it.
+fn claude_sonnet() -> ModelProfile {
+    ModelProfile {
+        key: "claude-sonnet".into(),
+        provider_model: "claude-sonnet-5".into(),
+        display_name: "Claude Sonnet".into(),
         provider: ProviderKind::Anthropic,
         status: ProfileStatus::Supported,
         context_window_tokens: Some(1_000_000),
@@ -298,6 +328,7 @@ mod tests {
             vec![
                 "gpt-5.6-terra",
                 "claude-opus-5",
+                "claude-sonnet-5",
                 "Qwen/Qwen3-Coder-480B-A35B-Instruct",
                 "Qwen/Qwen3-Coder-Next",
                 "Qwen/Qwen3-Coder-30B-A3B-Instruct",

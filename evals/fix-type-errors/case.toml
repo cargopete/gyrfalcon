@@ -1,7 +1,8 @@
 name = "fix-type-errors"
 prompt = """
-This crate does not compile. Two functions return the wrong type. Fix them so \
-`cargo check` is clean, changing nothing else.
+This crate does not compile. `one` and `two` are declared to return `u32`, but \
+their bodies return string literals. Keep both signatures as `-> u32` and fix \
+the bodies so `cargo check` is clean. Change nothing else.
 """
 max_turns = 12
 
@@ -10,9 +11,16 @@ cargo_check = "clean"
 files_changed = ["src/lib.rs"]
 files_unchanged = ["Cargo.toml"]
 
-[[expect.not_contains]]
+# The first live run against Sonnet fixed this by widening the signatures to
+# `-> &'static str`, which compiled and was a fair reading of a prompt that only
+# said "the wrong type". The case now says which half is wrong.
+[[expect.contains]]
 file = "src/lib.rs"
-text = "\"one\""
+text = "pub fn one() -> u32"
+
+[[expect.contains]]
+file = "src/lib.rs"
+text = "pub fn two() -> u32"
 
 [[expect.not_contains]]
 file = "src/lib.rs"

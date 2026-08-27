@@ -60,6 +60,7 @@ deltas are presentation data, never executable authority.
 |---|---|---:|---:|---|
 | `gpt-5.6-terra` | OpenAI Responses | configurable | 1,050,000 | provider-native |
 | `claude-opus-5` | Anthropic Messages | low through max | 1,000,000 | provider-native |
+| `claude-sonnet-5` | Anthropic Messages | low through max | 1,000,000 | provider-native |
 | `Qwen3-Coder-480B-A35B-Instruct` | Qwen Chat Completions | no | 262,144 | `qwen3_coder` |
 | `Qwen3-Coder-Next` | Qwen Chat Completions | no | 262,144 | `qwen3_coder` |
 | `Qwen3-Coder-30B-A3B-Instruct` | Qwen Chat Completions | no | 262,144 | `qwen3_coder` |

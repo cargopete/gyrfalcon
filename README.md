@@ -89,6 +89,10 @@ The eval corpus is two cases long. The harness is real and tested; two cases is
 a mechanism rather than evidence, and the open questions in RFC-0010 and
 RFC-0011 are waiting on a corpus large enough to answer them.
 
+It has been run against a real model once, and the first thing it found was a
+badly written case rather than anything about the model. RFC-0012 section 9.2
+records that, because the first thing an eval measures is the eval.
+
 These are missing features. None of them is delegated to the system prompt, and
 none is claimed to be present.
 
@@ -101,6 +105,7 @@ substring. An adapter may expose less than a model can do and never more.
 |---|---|---|
 | `terra` | OpenAI Responses | `gpt-5.6-terra` |
 | `claude-opus` | Anthropic Messages | `claude-opus-5` |
+| `claude-sonnet` | Anthropic Messages | `claude-sonnet-5` |
 | `qwen3-coder-480b-a35b` | Qwen Chat Completions | `Qwen/Qwen3-Coder-480B-A35B-Instruct` |
 | `qwen3-coder-next` | Qwen Chat Completions | `Qwen/Qwen3-Coder-Next` |
 | `qwen3-coder-30b-a3b` | Qwen Chat Completions | `Qwen/Qwen3-Coder-30B-A3B-Instruct` |
@@ -194,7 +199,7 @@ the correction rather than quietly reading as though it were right all along.
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-gyr eval --model claude-opus     # needs a credential; not part of cargo test
+gyr eval --model claude-sonnet   # needs a credential; not part of cargo test
 ```
 
 Nine crates:

@@ -163,6 +163,34 @@ saying `gate x1`. `gate start` returns no verdict, and the summary was inferring
 never called, and a report that contradicts the line above it is worse than one
 that says less.
 
+### 9.2 The first live run, 2026-08-27
+
+Two cases against `claude-sonnet-5`, 29,290 input and 909 output tokens for the
+pair, about seven pence at the published rate. Both passed. Two findings, and
+the first one is the corpus earning its keep on its first outing.
+
+**The corpus found a bad case before it found anything about a model.** The
+`fix-type-errors` prompt said two functions "return the wrong type". Sonnet
+fixed that by widening the signatures to `-> &'static str`, which compiles
+cleanly, satisfies `cargo check`, and is a fair reading of what the prompt
+actually said. The case's `not_contains` assertion caught it, so the run failed,
+and the failure was mine. The prompt now names which half is wrong and asserts
+both signatures survive.
+
+This is the failure mode a corpus exists to expose, and it is worth being blunt
+about the direction: the first thing an eval measures is the eval.
+
+**When the gate gets reached for is task-shaped.** On the ambiguous prompt
+Sonnet called `gate` twice, taking a baseline and checking after its edit. On
+the unambiguous one it never called the gate at all, verifying with a single
+`cargo check` after a single `apply_patch`. One observation each way is not a
+finding, but it is the shape of the question RFC-0011's open questions are
+asking, and the histogram that answers it now exists.
+
+The tool sequence on the passing run was `search`, `read`, `apply_patch`,
+`cargo`. No `exec`, which is one data point against RFC-0010's worry that the
+absence of a shell blocks tasks, and precisely one.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is

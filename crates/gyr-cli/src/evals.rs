@@ -215,12 +215,26 @@ fn print_summary(outcomes: &[Outcome]) {
         (calls, true) => format!("the gate was called {calls} time(s) and returned no verdict"),
         (_, false) => format!("gate: {}", verdicts.join(", ")),
     };
+    // Tokens in the summary because a person running a paid corpus should be
+    // able to see what it cost without going and asking the invoice.
+    let input: u64 = outcomes
+        .iter()
+        .map(|outcome| outcome.metrics.tokens.input_tokens)
+        .sum();
+    let output: u64 = outcomes
+        .iter()
+        .map(|outcome| outcome.metrics.tokens.output_tokens)
+        .sum();
     println!(
-        "\n  {}  {}",
+        "\n  {}  {}\n  {}",
         style::paint(
             if passed == outcomes.len() { OK } else { WARN },
             &format!("{passed}/{} passed", outcomes.len())
         ),
-        style::paint(MUTED, &gate)
+        style::paint(MUTED, &gate),
+        style::paint(
+            FAINT,
+            &format!("{input} input token(s), {output} output token(s) across the corpus")
+        )
     );
 }
