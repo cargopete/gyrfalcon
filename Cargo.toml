@@ -5,6 +5,7 @@ members = [
     "crates/gyr-model",
     "crates/gyr-protocol",
     "crates/gyr-rust",
+    "crates/gyr-sandbox",
     "crates/gyr-tools",
 ]
 resolver = "2"
@@ -26,6 +27,7 @@ gyr-core = { path = "crates/gyr-core" }
 gyr-model = { path = "crates/gyr-model" }
 gyr-protocol = { path = "crates/gyr-protocol" }
 gyr-rust = { path = "crates/gyr-rust" }
+gyr-sandbox = { path = "crates/gyr-sandbox" }
 gyr-tools = { path = "crates/gyr-tools" }
 ignore = "0.4.33"
 pretty_assertions = "1.4.1"

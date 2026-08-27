@@ -11,6 +11,7 @@ use std::io::stdin;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -36,6 +37,7 @@ use gyr_protocol::StopReason;
 use gyr_protocol::ToolDefinition;
 use gyr_rust::CargoLimits;
 use gyr_rust::CargoTool;
+use gyr_sandbox::Sandbox;
 use gyr_tools::ToolLimits;
 use gyr_tools::WorkspaceTools;
 use tokio_util::sync::CancellationToken;
@@ -43,6 +45,7 @@ use tokio_util::sync::CancellationToken;
 use crate::approve::TerminalApprover;
 use crate::config::ApprovalMode;
 use crate::config::RunSettings;
+use crate::config::SandboxMode;
 use crate::render::Renderer;
 
 #[derive(Debug, Parser)]
@@ -74,6 +77,9 @@ struct PromptArgs {
     /// Workspace root. Defaults to the current directory.
     #[arg(long)]
     workspace: Option<PathBuf>,
+    /// Containment to describe, so a printed prompt matches a real run.
+    #[arg(long, value_enum, default_value_t = SandboxMode::Workspace)]
+    sandbox: SandboxMode,
 }
 
 // Four independent switches, each meaning one thing to a person reading
@@ -108,6 +114,9 @@ struct RunArgs {
     /// Never emit terminal colour.
     #[arg(long)]
     plain: bool,
+    /// Operating-system containment for processes this run starts.
+    #[arg(long, value_enum, default_value_t = SandboxMode::Workspace)]
+    sandbox: SandboxMode,
     /// Endpoint for a self-served model, standing in for `QWEN_API_BASE`.
     #[arg(long)]
     api_base: Option<String>,
@@ -170,7 +179,8 @@ fn list_models(json: bool) -> Result<()> {
 fn print_prompt(args: &PromptArgs) -> Result<()> {
     let profile = config::resolve_profile(args.model.as_deref())?;
     let workspace = config::resolve_workspace(args.workspace.as_deref())?;
-    let tools = tool_set(&workspace)?;
+    let sandbox = config::build_sandbox(args.sandbox, &workspace)?;
+    let tools = tool_set(&workspace, sandbox)?;
     let context = prompt_context(&workspace, ApprovalMode::Interactive, &tools.definitions());
     let prompt = system_prompt(&context);
     eprintln!(
@@ -187,14 +197,14 @@ fn print_prompt(args: &PromptArgs) -> Result<()> {
 /// The Cargo tool is present only where a manifest is, so a workspace that is
 /// not a Cargo project simply has fewer tools rather than one that fails on
 /// every call.
-fn tool_set(workspace: &std::path::Path) -> Result<ToolSet> {
+fn tool_set(workspace: &std::path::Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet> {
     let mut runtimes: Vec<Box<dyn ToolRuntime>> = vec![Box::new(
         WorkspaceTools::new(workspace, ToolLimits::default())
             .map_err(|error| anyhow::anyhow!("{error}"))?,
     )];
     if workspace.join("Cargo.toml").is_file() {
         runtimes.push(Box::new(
-            CargoTool::new(workspace, CargoLimits::default())
+            CargoTool::new(workspace, CargoLimits::default(), sandbox)
                 .map_err(|error| anyhow::anyhow!("{error}"))?,
         ));
     }
@@ -222,7 +232,9 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     let settings = settings(&args, &session_id)?;
     let request = request_text(args.prompt)?;
 
-    let tools = tool_set(&settings.workspace)?;
+    let sandbox = config::build_sandbox(settings.sandbox, &settings.workspace)?;
+    let sandbox_label = sandbox.label();
+    let tools = tool_set(&settings.workspace, Arc::clone(&sandbox))?;
     let definitions = tools.definitions();
     let context = prompt_context(&settings.workspace, settings.mode, &definitions);
     let session = config::build_session(&settings, system_prompt(&context), definitions)?;
@@ -236,6 +248,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
             provider: settings.profile.provider,
             workspace_root: settings.workspace.display().to_string(),
             approval_mode: settings.mode.label().to_owned(),
+            sandbox: sandbox_label.clone(),
             max_model_turns: settings.max_turns.get(),
         },
     )?;
@@ -244,7 +257,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
         style::paint(
             &[style::DIM],
             &format!(
-                "{} · {} · log {}",
+                "{} · {} · {sandbox_label} · log {}",
                 settings.profile.display_name,
                 settings.mode.label(),
                 settings.log_path.display()
@@ -259,7 +272,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
             max_model_turns: settings.max_turns,
         },
     )
-    .with_policy(policy(settings.mode))
+    .with_policy(policy(settings.mode, &sandbox_label))
     .with_sink((Renderer::new(settings.show_reasoning), log));
 
     let cancel = CancellationToken::new();
@@ -298,15 +311,16 @@ fn settings(args: &RunArgs, session_id: &SessionId) -> Result<RunSettings> {
         log_path,
         max_turns: args.max_turns,
         mode,
+        sandbox: args.sandbox,
         show_reasoning: args.show_reasoning,
         api_base: args.api_base.clone(),
         disable_thinking: args.no_thinking,
     })
 }
 
-fn policy(mode: ApprovalMode) -> Box<dyn ApprovalPolicy> {
+fn policy(mode: ApprovalMode, sandbox: &str) -> Box<dyn ApprovalPolicy> {
     match mode {
-        ApprovalMode::Interactive => Box::new(Interactive::new(TerminalApprover)),
+        ApprovalMode::Interactive => Box::new(Interactive::new(TerminalApprover::new(sandbox))),
         ApprovalMode::ReadOnly => Box::new(ReadOnly),
         ApprovalMode::AllowAll => Box::new(AllowAll),
     }

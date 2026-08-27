@@ -501,6 +501,7 @@ dependencies = [
  "gyr-model",
  "gyr-protocol",
  "gyr-rust",
+ "gyr-sandbox",
  "gyr-tools",
  "serde_json",
  "tokio",
@@ -552,10 +553,19 @@ version = "0.1.0"
 dependencies = [
  "gyr-core",
  "gyr-protocol",
+ "gyr-sandbox",
  "pretty_assertions",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "gyr-sandbox"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "thiserror",
 ]
 
 [[package]]

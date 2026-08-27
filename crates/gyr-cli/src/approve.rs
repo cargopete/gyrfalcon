@@ -23,8 +23,19 @@ use crate::style::AMBER;
 use crate::style::BOLD;
 use crate::style::DIM;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TerminalApprover;
+#[derive(Debug, Clone)]
+pub struct TerminalApprover {
+    sandbox: String,
+}
+
+impl TerminalApprover {
+    #[must_use]
+    pub fn new(sandbox: impl Into<String>) -> Self {
+        Self {
+            sandbox: sandbox.into(),
+        }
+    }
+}
 
 impl Approver for TerminalApprover {
     fn ask(&self, call: &ToolCall, action: &ToolAction) -> ReplyFuture<'_> {
@@ -32,8 +43,9 @@ impl Approver for TerminalApprover {
         let subject = action.subject.clone().unwrap_or_else(|| call.name.clone());
         let tool = call.name.clone();
         let class = action.class;
+        let sandbox = self.sandbox.clone();
         Box::pin(async move {
-            let prompt = move || ask_on_terminal(&summary, &tool, &subject, class);
+            let prompt = move || ask_on_terminal(&summary, &tool, &subject, class, &sandbox);
             match tokio::task::spawn_blocking(prompt).await {
                 Ok(reply) => reply,
                 Err(error) => {
@@ -48,7 +60,13 @@ impl Approver for TerminalApprover {
 ///
 /// A closed or non-interactive standard input reaches the same place: refusal.
 /// An approval that a person did not give is not an approval.
-fn ask_on_terminal(summary: &str, tool: &str, subject: &str, class: ToolClass) -> ApprovalReply {
+fn ask_on_terminal(
+    summary: &str,
+    tool: &str,
+    subject: &str,
+    class: ToolClass,
+    sandbox: &str,
+) -> ApprovalReply {
     let mut err = stderr().lock();
     let header = style::paint(&[AMBER, BOLD], "  approval");
     let detail = style::paint(&[DIM], &format!("      rule scope: {tool} on {subject}"));
@@ -57,7 +75,9 @@ fn ask_on_terminal(summary: &str, tool: &str, subject: &str, class: ToolClass) -
             "always for this exact command",
             // Worth saying every time. A rule approves an argument vector, and
             // the code that vector compiles and runs can change afterwards.
-            Some("      this runs code on your machine, unsandboxed, and what it runs may change"),
+            Some(format!(
+                "      runs code on your machine · containment: {sandbox} · what it runs may change"
+            )),
         ),
         _ => ("always for this file", None),
     };
@@ -67,7 +87,7 @@ fn ask_on_terminal(summary: &str, tool: &str, subject: &str, class: ToolClass) -
     );
     let written = writeln!(err, "\n{header}  {summary}")
         .and_then(|()| writeln!(err, "{detail}"))
-        .and_then(|()| match caveat {
+        .and_then(|()| match &caveat {
             Some(caveat) => writeln!(err, "{}", style::paint(&[DIM], caveat)),
             None => Ok(()),
         })

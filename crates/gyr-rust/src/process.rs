@@ -6,6 +6,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use gyr_core::ToolError;
+use gyr_sandbox::Sandbox;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -25,7 +26,7 @@ pub struct Execution {
 /// The inherited environment is cleared first, so a build script cannot read
 /// the agent's provider credentials out of it. The child still runs arbitrary
 /// code; this narrows what that code can see, not what it can do.
-fn child_environment() -> BTreeMap<&'static str, String> {
+fn child_environment(sandbox: &dyn Sandbox) -> BTreeMap<&'static str, String> {
     let mut environment = BTreeMap::new();
     for name in ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"] {
         if let Ok(value) = std::env::var(name) {
@@ -34,6 +35,12 @@ fn child_environment() -> BTreeMap<&'static str, String> {
     }
     environment.insert("CARGO_TERM_COLOR", "never".to_owned());
     environment.insert("TERM", "dumb".to_owned());
+    // Anything reaching for the system temporary directory would be denied by a
+    // confining sandbox, and widening the writable set to reach it would hand
+    // every child a staging area outside the workspace. It gets one inside.
+    if let Some(temp_dir) = sandbox.temp_dir() {
+        environment.insert("TMPDIR", temp_dir.display().to_string());
+    }
     environment
 }
 
@@ -47,25 +54,29 @@ pub async fn run(
     program: &str,
     arguments: &[String],
     directory: &Path,
+    sandbox: &dyn Sandbox,
     limit: usize,
     timeout: Duration,
 ) -> Result<Execution, ToolError> {
-    let mut command = Command::new(program);
+    let wrapped = sandbox
+        .wrap(program, arguments)
+        .map_err(|error| ToolError::new(error.to_string()))?;
+    let mut command = Command::new(&wrapped.program);
     command
-        .args(arguments)
+        .args(&wrapped.arguments)
         .current_dir(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .env_clear();
-    for (name, value) in child_environment() {
+    for (name, value) in child_environment(sandbox) {
         command.env(name, value);
     }
 
     let mut child = command
         .spawn()
-        .map_err(|error| ToolError::new(format!("cannot run {program}: {error}")))?;
+        .map_err(|error| ToolError::new(format!("cannot run {}: {error}", wrapped.program)))?;
     let stdout = child
         .stdout
         .take()

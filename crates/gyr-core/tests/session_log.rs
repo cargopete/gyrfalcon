@@ -49,6 +49,7 @@ fn meta() -> SessionMeta {
         provider: ProviderKind::Anthropic,
         workspace_root: "/tmp/workspace".into(),
         approval_mode: "read-only (mutations are refused)".into(),
+        sandbox: "workspace (seatbelt: writes confined, network denied)".into(),
         max_model_turns: 32,
     }
 }

@@ -22,12 +22,18 @@ diagnostics rather than compiler output: an `E0308` arrives as a level, a code, 
 file, a line and a column. Every Cargo call is classified as a process, is never
 auto-allowed by any policy, and can be killed by Ctrl-C or by its wall clock.
 
-There is no general `exec`, because there is no operating-system sandbox. What
-is enforced today is a filesystem fence, a closed argument surface and approval,
-which is a smaller claim than a sandbox and the only one being made. The Rust
-diagnostic gate, the interactive terminal interface, conversation state across
-invocations and log replay do not exist yet. This is a usable single-shot agent
-and not yet a usable coding session, and the repository does not claim otherwise.
+On macOS every process runs inside a Seatbelt sandbox that confines writes to
+the workspace and denies the network. It does not confine reads, so a build
+script can still read a credential file; what it cannot do is write it anywhere
+outside the workspace or send it. On every other platform the sandbox is
+unimplemented and Gyrfalcon refuses to run processes at all unless a person
+passes `--sandbox none`, which is named in the approval prompt and written into
+the session log.
+
+There is no general `exec` yet. The Rust diagnostic gate, the interactive
+terminal interface, conversation state across invocations and log replay do not
+exist either. This is a usable single-shot agent and not yet a usable coding
+session, and the repository does not claim otherwise.
 
 The initial model targets are:
 
@@ -51,6 +57,7 @@ runtimes may follow once they pass the same conformance suite.
 - [RFC-0005: Workspace filesystem tools](docs/rfcs/RFC-0005-filesystem-tools.md)
 - [RFC-0006: Approvals, session log and the first interactive run](docs/rfcs/RFC-0006-approvals-and-the-first-run.md)
 - [RFC-0008: The structured Cargo tool](docs/rfcs/RFC-0008-cargo-tool.md)
+- [RFC-0009: Operating-system sandbox](docs/rfcs/RFC-0009-sandbox.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed
 in source, documented by a provider, or inferred. Quantitative claims carry a
@@ -75,7 +82,9 @@ gyr run --model claude-opus "what does gyr-core::Agent::run guarantee?"
 ```
 
 Mutations ask before they happen, and so does every `cargo` call, which is
-classified as a process and never auto-allowed. `--read-only` refuses both
+classified as a process, never auto-allowed, and run inside the sandbox.
+A sandboxed run has no network, so Cargo runs `--offline` and cannot fetch a
+dependency that is not already in the local registry cache. `--read-only` refuses both
 instead, and `--dangerously-allow-all` does not ask, which is a decision worth
 making deliberately. Every run writes `.gyr/sessions/<id>.jsonl`.
 

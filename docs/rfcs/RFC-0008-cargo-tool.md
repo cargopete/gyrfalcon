@@ -37,6 +37,11 @@ path, a filtered environment, hard output limits, a wall-clock limit,
 cancellation, and an approval decision recorded before anything runs. That is a
 smaller claim than a sandbox and it is the one being made.
 
+**Amended 2026-08-27:** RFC-0009 added the sandbox on macOS, so a confined run
+also cannot write outside the workspace or reach the network. It can still read
+anything on the machine. See RFC-0009 section 2 for what that combination does
+and does not guarantee.
+
 ## 3. The third tool class
 
 RFC-0006 shipped two classes and said further ones arrive with the tool that
@@ -86,6 +91,15 @@ Every invocation passes `--manifest-path <root>/Cargo.toml` explicitly. Cargo
 searches parent directories for a manifest when not told otherwise, and a tool
 confined to a workspace root that then builds its grandparent would be an
 entertaining way to undo RFC-0005 section 2.
+
+### 4.1 Amendment, 2026-08-27
+
+RFC-0009 added containment. Two consequences land here. A confined run has no
+network, so the `cargo` tool passes `--offline` on every subcommand except
+`fmt`, which does not accept the flag and does not need it. And the child's
+`TMPDIR` is set to a directory inside the workspace, because a confining profile
+denies the system one and widening the writable set to reach it would defeat the
+point.
 
 ## 5. Environment
 

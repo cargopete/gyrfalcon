@@ -17,6 +17,7 @@ gyr-core.workspace = true
 gyr-model.workspace = true
 gyr-protocol.workspace = true
 gyr-rust.workspace = true
+gyr-sandbox.workspace = true
 gyr-tools.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

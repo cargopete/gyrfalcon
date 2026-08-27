@@ -6,6 +6,7 @@
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -22,6 +23,18 @@ use gyr_model::qwen::QwenSession;
 use gyr_protocol::ModelProfile;
 use gyr_protocol::ProviderKind;
 use gyr_protocol::ToolDefinition;
+use gyr_sandbox::Sandbox;
+use gyr_sandbox::Unconfined;
+
+/// How much the operating system confines a process Gyrfalcon starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    /// Writes confined to the workspace, network denied.
+    Workspace,
+    /// Nothing confined. Never a default, always recorded.
+    None,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalMode {
@@ -51,6 +64,7 @@ pub struct RunSettings {
     pub max_turns: NonZeroU32,
     pub mode: ApprovalMode,
     pub show_reasoning: bool,
+    pub sandbox: SandboxMode,
     /// Overrides the endpoint for a self-served model.
     pub api_base: Option<String>,
     /// Asks a toggling model not to think. Absent leaves the server's default.
@@ -169,6 +183,24 @@ fn require_env(
     }
 }
 
+/// Builds the containment for a run, refusing to pretend where there is none.
+///
+/// A platform without an implementation does not quietly fall through to
+/// running unconfined. The person has to ask for that by name, and the log
+/// records that they did.
+pub fn build_sandbox(mode: SandboxMode, workspace: &Path) -> Result<Arc<dyn Sandbox>> {
+    match mode {
+        SandboxMode::None => Ok(Arc::new(Unconfined)),
+        SandboxMode::Workspace => match gyr_sandbox::detect(workspace) {
+            Ok(sandbox) => Ok(Arc::from(sandbox)),
+            Err(error) => bail!(
+                "{error}. Pass --sandbox none to run without containment, \
+                 which is recorded in the session log."
+            ),
+        },
+    }
+}
+
 /// The default session log path beneath the workspace.
 pub fn default_log_path(workspace: &Path, session_id: &str) -> PathBuf {
     workspace
@@ -194,6 +226,7 @@ mod tests {
             log_path: PathBuf::from("run.jsonl"),
             max_turns: NonZeroU32::new(4).unwrap(),
             mode: ApprovalMode::ReadOnly,
+            sandbox: SandboxMode::Workspace,
             show_reasoning: false,
             api_base: None,
             disable_thinking: false,

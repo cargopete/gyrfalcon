@@ -195,7 +195,9 @@ chosen that retention mode.
    operating-system boundary.
 7. The structured `cargo` tool. **Done** in RFC-0008. General `exec` was
    deliberately deferred behind the sandbox rather than shipped beside it.
-8. OS sandbox enforcement, and `exec` once it exists.
+8. OS sandbox enforcement. **Done on macOS** in RFC-0009; Linux is unimplemented
+   and fails closed rather than running unconfined. `exec` is now unblocked and
+   not yet written.
 9. Rust diagnostic gate and representative eval corpus.
 10. Interactive terminal interface.
 11. ChatGPT OAuth, after the transport is independently sound.

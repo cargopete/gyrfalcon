@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -12,6 +13,8 @@ use gyr_protocol::ToolClass;
 use gyr_protocol::ToolOutput;
 use gyr_rust::CargoLimits;
 use gyr_rust::CargoTool;
+use gyr_sandbox::Sandbox;
+use gyr_sandbox::Unconfined;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -47,12 +50,19 @@ impl Fixture {
         Self { path }
     }
 
+    /// Unconfined, so these tests measure the Cargo tool rather than the
+    /// sandbox. Confinement gets its own test below.
     fn tool(&self) -> CargoTool {
-        CargoTool::new(&self.path, CargoLimits::default()).unwrap()
+        self.tool_with(CargoLimits::default(), Arc::new(Unconfined))
     }
 
-    fn tool_with(&self, limits: CargoLimits) -> CargoTool {
-        CargoTool::new(&self.path, limits).unwrap()
+    fn tool_with(&self, limits: CargoLimits, sandbox: Arc<dyn Sandbox>) -> CargoTool {
+        CargoTool::new(&self.path, limits, sandbox).unwrap()
+    }
+
+    fn sandboxed(&self) -> CargoTool {
+        let sandbox = gyr_sandbox::detect(&self.path).expect("a sandbox on this platform");
+        self.tool_with(CargoLimits::default(), Arc::from(sandbox))
     }
 }
 
@@ -161,7 +171,7 @@ async fn a_wall_clock_kills_a_long_run_and_says_so() {
     };
 
     let output = fixture
-        .tool_with(limits)
+        .tool_with(limits, Arc::new(Unconfined))
         .execute(&call(json!({"command": "test"})))
         .await
         .unwrap();
@@ -268,8 +278,104 @@ fn a_directory_without_a_manifest_is_refused_at_construction() {
     ));
     fs::create_dir_all(&path).unwrap();
 
-    let error = CargoTool::new(&path, CargoLimits::default()).unwrap_err();
+    let error = CargoTool::new(&path, CargoLimits::default(), Arc::new(Unconfined)).unwrap_err();
 
     fs::remove_dir_all(&path).unwrap();
     assert!(error.to_string().contains("no Cargo.toml"));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_confined_check_still_runs_a_build_script() {
+    const BUILD_SCRIPT: &str = r#"
+fn main() {
+    let out = std::env::var("OUT_DIR").unwrap();
+    std::fs::write(format!("{out}/generated.rs"), "pub const N: u32 = 7;\n").unwrap();
+}
+"#;
+    let fixture = Fixture::new(
+        "include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\npub fn n() -> u32 { N }\n",
+    );
+    fs::write(fixture.path.join("build.rs"), BUILD_SCRIPT).unwrap();
+
+    let output = fixture
+        .sandboxed()
+        .execute(&call(json!({"command": "check"})))
+        .await
+        .unwrap();
+    let output = parse(&output);
+
+    assert_eq!(output["exit_code"], 0, "output: {}", output["output"]);
+    assert_eq!(output["counts"]["errors"], 0);
+    assert!(
+        output["command"].as_str().unwrap().contains("--offline"),
+        "a confined run has no network and must say --offline: {}",
+        output["command"]
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_confined_build_script_cannot_write_outside_the_workspace() {
+    let escape = std::env::temp_dir().join(format!("gyrfalcon-escape-{}", std::process::id()));
+    let _ = fs::remove_file(&escape);
+    let fixture = Fixture::new("pub fn n() -> u32 { 2 }\n");
+    let build_script = format!(
+        "fn main() {{\n    std::fs::write(r\"{}\", \"escaped\").expect(\"the sandbox let it through\");\n}}\n",
+        escape.display()
+    );
+    fs::write(fixture.path.join("build.rs"), build_script).unwrap();
+
+    let output = fixture
+        .sandboxed()
+        .execute(&call(json!({"command": "check"})))
+        .await
+        .unwrap();
+    let output = parse(&output);
+
+    assert_ne!(output["exit_code"], 0, "the build script must have failed");
+    assert!(
+        !escape.exists(),
+        "a confined build script wrote to {}",
+        escape.display()
+    );
+    // The build script must have failed because the write was refused, not
+    // because it did not compile. A green-looking test for the wrong reason is
+    // exactly what a sandbox test must not be.
+    let rendered = output["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|diagnostic| diagnostic["rendered"].as_str())
+        .collect::<String>();
+    let evidence = format!(
+        "{rendered}{}",
+        output["output"].as_str().unwrap_or_default()
+    );
+    assert!(
+        evidence.contains("the sandbox let it through")
+            && evidence.contains("Operation not permitted"),
+        "the build script failed for some other reason: {evidence}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_confined_run_gets_a_temporary_directory_inside_the_workspace() {
+    let fixture = Fixture::new("pub fn n() -> u32 { 2 }\n");
+
+    let output = fixture
+        .sandboxed()
+        .execute(&call(json!({"command": "test"})))
+        .await
+        .unwrap();
+    let output = parse(&output);
+
+    // Doctests build in TMPDIR, which a confining profile would otherwise deny.
+    assert_eq!(output["exit_code"], 0, "output: {}", output["output"]);
+    assert!(
+        output["output"].as_str().unwrap().contains("Doc-tests"),
+        "output: {}",
+        output["output"]
+    );
 }

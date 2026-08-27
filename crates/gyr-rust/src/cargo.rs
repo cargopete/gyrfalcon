@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gyr_core::ToolError;
@@ -11,6 +12,7 @@ use gyr_protocol::ToolAction;
 use gyr_protocol::ToolCall;
 use gyr_protocol::ToolDefinition;
 use gyr_protocol::ToolOutput;
+use gyr_sandbox::Sandbox;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -53,6 +55,7 @@ pub struct CargoTool {
     root: PathBuf,
     manifest: PathBuf,
     limits: CargoLimits,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 impl CargoTool {
@@ -62,7 +65,11 @@ impl CargoTool {
     ///
     /// Returns an error when the root cannot be canonicalised or holds no
     /// `Cargo.toml`.
-    pub fn new(root: impl AsRef<Path>, limits: CargoLimits) -> Result<Self, ToolError> {
+    pub fn new(
+        root: impl AsRef<Path>,
+        limits: CargoLimits,
+        sandbox: Arc<dyn Sandbox>,
+    ) -> Result<Self, ToolError> {
         let root = std::fs::canonicalize(root.as_ref()).map_err(|error| {
             ToolError::new(format!(
                 "cannot resolve workspace root {}: {error}",
@@ -80,6 +87,7 @@ impl CargoTool {
             root,
             manifest,
             limits,
+            sandbox,
         })
     }
 
@@ -131,6 +139,12 @@ impl CargoTool {
             }
         }
         arguments.extend(["--manifest-path".to_owned(), manifest]);
+        // A confined child has no network, and without --offline Cargo fails on
+        // DNS in a way that reads as a network fault rather than as policy.
+        // `cargo fmt` does not accept the flag and does not need it.
+        if self.sandbox.denies_network() && request.command != CargoCommand::Fmt {
+            arguments.push("--offline".to_owned());
+        }
         if let Some(filter) = &request.filter
             && request.command == CargoCommand::Test
         {
@@ -164,6 +178,7 @@ impl CargoTool {
             &Self::program(),
             &arguments,
             &self.root,
+            self.sandbox.as_ref(),
             self.limits.max_captured_bytes,
             self.limits.timeout,
         )
@@ -237,11 +252,12 @@ impl ToolRuntime for CargoTool {
     fn definitions(&self) -> Vec<ToolDefinition> {
         vec![ToolDefinition {
             name: "cargo".into(),
-            description: "Run one of a fixed set of Cargo commands in the workspace and return \
-                          parsed diagnostics. No subcommand is read-only: check and clippy run \
-                          build scripts, and test runs test code, all on the host without a \
-                          sandbox."
-                .into(),
+            description: format!(
+                "Run one of a fixed set of Cargo commands in the workspace and return parsed \
+                 diagnostics. No subcommand is read-only: check and clippy run build scripts, \
+                 and test runs test code. Containment: {}.",
+                self.sandbox.label()
+            ),
             input_schema: json!({
                 "type": "object",
                 "properties": {

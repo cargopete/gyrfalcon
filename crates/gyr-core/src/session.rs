@@ -122,6 +122,9 @@ pub struct SessionMeta {
     /// The canonical workspace root. Credentials are never recorded.
     pub workspace_root: String,
     pub approval_mode: String,
+    /// The containment in force. A person running unconfined should be able to
+    /// tell from the log that they did.
+    pub sandbox: String,
     pub max_model_turns: u32,
 }
 

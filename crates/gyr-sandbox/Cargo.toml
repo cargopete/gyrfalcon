@@ -1,5 +1,5 @@
 [package]
-name = "gyr-rust"
+name = "gyr-sandbox"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,12 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-gyr-core.workspace = true
-gyr-protocol.workspace = true
-gyr-sandbox.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
