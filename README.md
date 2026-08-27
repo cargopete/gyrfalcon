@@ -48,6 +48,13 @@ CI and evals.
   session rule is keyed on the tool and the resolved target, never on a
   description of what a command probably does. A refusal returns to the model as
   an ordinary tool result under its original call ID.
+- **Configuration, split by who wrote it.** `~/.config/gyr/config.toml` for
+  your defaults, `<workspace>/.gyr/config.toml` for a project's. The second
+  arrives with the repository, so it may set preferences and may **not** set
+  `approvals`, `sandbox` or `api_base` — the first two weaken a boundary and the
+  third redirects where a credential is sent. A project file that tries is an
+  error naming the file and the key. No file holds a credential at any layer.
+  `gyr config` prints every setting and where its value came from.
 - **Resumable sessions.** Closing the terminal used to lose the conversation.
   `gyr --resume` continues the most recent one in the workspace, or a named one.
   What is persisted is the adapter's own native history, not the session log:
@@ -117,7 +124,9 @@ Shells and pipelines. Rollback: the gate refuses
 rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Summarising compaction, and any context relief at all for OpenAI, whose
 server-side continuation keeps no local history to reduce. Log replay, which section 2 of RFC-0014
-argues cannot be done honestly from a normalised log. A configuration file.
+argues cannot be done honestly from a normalised log. Context relief for
+OpenAI, whose server-side continuation keeps nothing local to reduce, and which
+wants a live credential to verify rather than merely to write.
 
 The eval corpus is eight cases long, which is a start rather than a corpus. All
 eight pass against `claude-sonnet-5`, the six-case sweep costing about
@@ -220,6 +229,9 @@ export ANTHROPIC_API_KEY=...
 gyr --model claude-opus
 ```
 
+Or put the model in `~/.config/gyr/config.toml` and just run `gyr`. See
+`gyr config` for what is set and where it came from.
+
 That opens a session. Inside it, `/help`, `/status`, `/log` and `/exit`; Ctrl-C
 cancels the current turn and keeps the conversation; Ctrl-D leaves. History
 persists to `.gyr/history`, and the conversation itself to `.gyr/sessions`, so
@@ -273,6 +285,7 @@ The command is `gyr`; Gyrfalcon is the project.
 - [RFC-0012: The eval corpus and harness](docs/rfcs/RFC-0012-eval-harness.md)
 - [RFC-0013: The context budget](docs/rfcs/RFC-0013-context-budget.md)
 - [RFC-0014: Resuming a session](docs/rfcs/RFC-0014-session-resumption.md)
+- [RFC-0015: Configuration files](docs/rfcs/RFC-0015-configuration.md)
 
 The RFCs are part of the project. Findings are labelled as measured, observed in
 source, documented by a provider, or inferred. Quantitative claims carry a date

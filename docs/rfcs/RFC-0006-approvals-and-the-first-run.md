@@ -194,6 +194,11 @@ This slice reads configuration from flags and the environment. There is no
 configuration file yet, and pretending otherwise would only produce a format to
 regret later.
 
+**Amended 2026-08-27.** The surface settled and RFC-0015 built one, with the
+condition this paragraph set as its stated trigger. The interesting part turned
+out not to be the format: a project file arrives with a repository someone else
+wrote, so it may not weaken a boundary or redirect a credential.
+
 | Setting | Flag | Environment |
 |---|---|---|
 | Model key | `--model` | `GYR_MODEL` |
