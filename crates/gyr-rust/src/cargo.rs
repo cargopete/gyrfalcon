@@ -21,7 +21,7 @@ use serde_json::json;
 use crate::diagnostics;
 use crate::diagnostics::Diagnostic;
 use crate::diagnostics::DiagnosticCounts;
-use crate::process;
+use gyr_exec::process;
 
 /// The longest a package name or test filter may be.
 const MAX_ARGUMENT_BYTES: usize = 128;

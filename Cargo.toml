@@ -2,6 +2,7 @@
 members = [
     "crates/gyr-cli",
     "crates/gyr-core",
+    "crates/gyr-exec",
     "crates/gyr-model",
     "crates/gyr-protocol",
     "crates/gyr-rust",
@@ -24,6 +25,7 @@ clap = { version = "4.5.51", features = ["derive"] }
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 gyr-core = { path = "crates/gyr-core" }
+gyr-exec = { path = "crates/gyr-exec" }
 gyr-model = { path = "crates/gyr-model" }
 gyr-protocol = { path = "crates/gyr-protocol" }
 gyr-rust = { path = "crates/gyr-rust" }

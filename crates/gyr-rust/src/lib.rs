@@ -7,7 +7,6 @@
 
 mod cargo;
 mod diagnostics;
-mod process;
 
 pub use crate::cargo::CargoLimits;
 pub use crate::cargo::CargoTool;

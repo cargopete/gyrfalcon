@@ -1,4 +1,7 @@
 //! Running one child process under a wall clock, with capped output.
+//!
+//! Nothing here is Rust-specific. It spawns, drains, caps, times out and kills,
+//! and it asks a sandbox to rewrite the command before any of that.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -50,6 +53,13 @@ fn child_environment(sandbox: &dyn Sandbox) -> BTreeMap<&'static str, String> {
 /// Dropping the returned future kills the child, because the command is spawned
 /// with `kill_on_drop`. That is what makes a cancelled agent run leave no
 /// process behind.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] when the sandbox cannot wrap the command, when the
+/// child cannot be spawned, or when its output cannot be read. Exceeding the
+/// wall clock is not an error: it returns an [`Execution`] with `timed_out`
+/// set, because a killed process is a result rather than a fault.
 pub async fn run(
     program: &str,
     arguments: &[String],

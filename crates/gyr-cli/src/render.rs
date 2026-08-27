@@ -218,6 +218,17 @@ pub fn describe_call(call: &ToolCall) -> String {
             }
         }),
         "apply_patch" => argument_string(&call.arguments, "path"),
+        "exec" => call
+            .arguments
+            .get("command")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }),
         "cargo" => argument_string(&call.arguments, "command").map(|command| {
             let package = argument_string(&call.arguments, "package")
                 .map_or_else(String::new, |package| format!(" -p {package}"));

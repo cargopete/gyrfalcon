@@ -8,6 +8,7 @@
 pub mod approval;
 pub mod prompt;
 pub mod session;
+pub mod workspace;
 
 use std::collections::HashMap;
 use std::collections::HashSet;

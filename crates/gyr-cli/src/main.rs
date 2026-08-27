@@ -31,6 +31,8 @@ use gyr_core::prompt::system_prompt;
 use gyr_core::session::JsonlSessionLog;
 use gyr_core::session::SessionId;
 use gyr_core::session::SessionMeta;
+use gyr_exec::ExecLimits;
+use gyr_exec::ExecTool;
 use gyr_model::builtin_profiles;
 use gyr_protocol::ProfileStatus;
 use gyr_protocol::StopReason;
@@ -202,6 +204,10 @@ fn tool_set(workspace: &std::path::Path, sandbox: Arc<dyn Sandbox>) -> Result<To
         WorkspaceTools::new(workspace, ToolLimits::default())
             .map_err(|error| anyhow::anyhow!("{error}"))?,
     )];
+    runtimes.push(Box::new(
+        ExecTool::new(workspace, ExecLimits::default(), Arc::clone(&sandbox))
+            .map_err(|error| anyhow::anyhow!("{error}"))?,
+    ));
     if workspace.join("Cargo.toml").is_file() {
         runtimes.push(Box::new(
             CargoTool::new(workspace, CargoLimits::default(), sandbox)

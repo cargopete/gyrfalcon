@@ -1,52 +1,133 @@
 # Gyrfalcon
 
 Gyrfalcon is an open-source terminal coding agent written in Rust and designed
-for Rust work. It will run against a deliberately bounded set of strong hosted
-and open-weight models rather than assuming that every model behaves like one
-API wearing a false moustache.
+for Rust work. It runs against a deliberately bounded set of strong hosted and
+open-weight models rather than assuming that every model behaves like one API
+wearing a false moustache.
+
+It is also a serious educational implementation of the machinery behind tools
+such as Claude Code and Codex, published with its design record, its failures
+and its measurements.
 
 ## Status
 
-`gyr run` is a working one-shot agent. It selects a model, builds a provider
-session, streams a turn, classifies each tool call, enforces an approval policy
-in code, records every proposed action and decision to an append-only JSONL log,
-and stops on Ctrl-C without inventing a terminal event the provider never sent.
+`gyr run` is a working one-shot agent. It selects a model, builds a
+provider-native session, streams a turn, classifies every tool call, enforces an
+approval policy in code, runs processes inside an operating-system sandbox,
+records every proposed action and decision to an append-only log, and stops on
+Ctrl-C without inventing a terminal event the provider never sent.
 
-The OpenAI Responses, Anthropic Messages and Qwen Chat Completions transports
-are implemented with recorded parser tests; Qwen and Anthropic also have local
-HTTP/SSE wire tests. Read, ignore-aware literal search and stale-checked exact
-patch tools are wired to the loop behind the approval layer.
+### What works
 
-A structured `cargo` tool runs a closed set of subcommands and returns parsed
-diagnostics rather than compiler output: an `E0308` arrives as a level, a code, a
-file, a line and a column. Every Cargo call is classified as a process, is never
-auto-allowed by any policy, and can be killed by Ctrl-C or by its wall clock.
+- **Three native transports.** OpenAI Responses, Anthropic Messages and Qwen
+  Chat Completions, each keeping its own conversation state so continuation does
+  not lose reasoning items or content ordering. Recorded parser tests
+  throughout; Qwen and Anthropic also have local HTTP/SSE wire tests.
+- **Five tools.** `read` returns bounded, numbered, fingerprinted ranges.
+  `search` is literal and ignore-aware with explicit totals. `apply_patch`
+  replaces one exact occurrence and refuses a stale or ambiguous edit. `exec`
+  runs one program with one argument vector. `cargo` runs a closed set of
+  subcommands and returns parsed diagnostics, so an `E0308` arrives as a level,
+  a code, a file, a line and a column rather than as a page of compiler output.
+- **Approval enforced below the model.** Every call is classified read-only,
+  mutating or process. Read-only calls proceed. Anything else asks, and a
+  session rule is keyed on the tool and the resolved target, never on a
+  description of what a command probably does. A refusal returns to the model as
+  an ordinary tool result under its original call ID.
+- **A session log.** Append-only JSONL holding the proposed action, the
+  decision, the execution and the result, plus the model, workspace, approval
+  mode and containment in force.
+
+### What is enforced, and what is not
 
 On macOS every process runs inside a Seatbelt sandbox that confines writes to
-the workspace and denies the network. It does not confine reads, so a build
+the workspace and denies the network. **It does not confine reads.** A build
 script can still read a credential file; what it cannot do is write it anywhere
-outside the workspace or send it. On every other platform the sandbox is
-unimplemented and Gyrfalcon refuses to run processes at all unless a person
-passes `--sandbox none`, which is named in the approval prompt and written into
-the session log.
+outside the workspace or transmit it. That combination is the guarantee, and
+RFC-0009 section 2 explains why a narrower read profile was rejected rather than
+attempted badly.
 
-There is no general `exec` yet. The Rust diagnostic gate, the interactive
-terminal interface, conversation state across invocations and log replay do not
-exist either. This is a usable single-shot agent and not yet a usable coding
-session, and the repository does not claim otherwise.
+One consequence is worth knowing because it is load-bearing. RFC-0001 lists
+automatic commits, pushes, deployments and purchases as non-goals. Under
+confinement `git push` fails with `connect to host github.com port 22: Operation
+not permitted`, because the sandbox refused the socket, not because its name
+appears on a blacklist. There is no blacklist.
 
-The initial model targets are:
+On every other platform the sandbox is unimplemented, and Gyrfalcon refuses to
+run any process rather than quietly running it unconfined. `--sandbox none`
+remains available, is never the default, appears in the approval prompt as
+`unconfined`, and is written into the session log.
 
-- OpenAI `gpt-5.6-terra`, using the Responses API.
-- Anthropic Claude Opus, using the Messages API.
-- `Qwen/Qwen3-Coder-480B-A35B-Instruct`.
-- `Qwen/Qwen3-Coder-Next` (80B total, 3B active).
-- `Qwen/Qwen3-Coder-30B-A3B-Instruct`.
-- `Qwen/Qwen3.6-27B`.
-- `Qwen/Qwen3.6-35B-A3B`.
+### What does not exist yet
+
+A sandbox on Linux or Windows. Shells and pipelines. The Rust diagnostic gate
+that tracks a diagnostic set across an edit batch. An interactive terminal
+interface. Conversation state across invocations. Log replay. Compaction. A
+configuration file.
+
+These are missing features. None of them is delegated to the system prompt, and
+none is claimed to be present. This is a usable single-shot agent and not yet a
+usable coding session.
+
+## Models
+
+The catalogue is explicit data rather than inference from a URL or a model-name
+substring. An adapter may expose less than a model can do and never more.
+
+| Key | Provider | Model |
+|---|---|---|
+| `terra` | OpenAI Responses | `gpt-5.6-terra` |
+| `claude-opus` | Anthropic Messages | `claude-opus-5` |
+| `qwen3-coder-480b-a35b` | Qwen Chat Completions | `Qwen/Qwen3-Coder-480B-A35B-Instruct` |
+| `qwen3-coder-next` | Qwen Chat Completions | `Qwen/Qwen3-Coder-Next` |
+| `qwen3-coder-30b-a3b` | Qwen Chat Completions | `Qwen/Qwen3-Coder-30B-A3B-Instruct` |
+| `qwen3.6-27b` | Qwen Chat Completions | `Qwen/Qwen3.6-27B` |
+| `qwen3.6-35b-a3b` | Qwen Chat Completions | `Qwen/Qwen3.6-35B-A3B` |
+| `qwen3-8b` | Qwen Chat Completions | `qwen3:8b` — development only |
 
 Qwen's reference serving stacks are vLLM and SGLang. Ollama and other local
 runtimes may follow once they pass the same conformance suite.
+
+`qwen3-8b` is present so the loop can be driven by real inference on a laptop.
+It is not a coding target, it has not been through any conformance suite, and
+`gyr models` says so beside it.
+
+## Using it
+
+```console
+cargo run -p gyr-cli -- models
+cargo run -p gyr-cli -- prompt --model claude-opus
+```
+
+Running against a model needs that provider's credential in the environment:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `QWEN_API_BASE` for a self-hosted
+endpoint. A missing one fails before any request is sent, naming the variable.
+
+```console
+export ANTHROPIC_API_KEY=...
+gyr run --model claude-opus "what does gyr-core::Agent::run guarantee?"
+```
+
+Mutations and processes ask before they happen. `--read-only` refuses both
+instead. `--dangerously-allow-all` does not ask, which is a decision worth
+making deliberately. Every run writes `.gyr/sessions/<id>.jsonl`.
+
+A sandboxed run has no network, so Cargo runs `--offline` and cannot fetch a
+dependency that is not already in the local registry cache. Adding a crate is a
+job for a person, or for `--sandbox none`.
+
+Against a local endpoint:
+
+```console
+gyr run --model qwen3-8b --api-base http://thinkpad.local:11434/v1 \
+        --no-thinking --read-only "what is in src/lib.rs?"
+```
+
+Ollama serves a context far smaller than the model's native window unless
+`num_ctx` is raised, and it truncates rather than complaining. See RFC-0003
+section 3.1 for what has and has not been measured there.
+
+The command is `gyr`; Gyrfalcon is the project.
 
 ## Design record
 
@@ -58,51 +139,40 @@ runtimes may follow once they pass the same conformance suite.
 - [RFC-0006: Approvals, session log and the first interactive run](docs/rfcs/RFC-0006-approvals-and-the-first-run.md)
 - [RFC-0008: The structured Cargo tool](docs/rfcs/RFC-0008-cargo-tool.md)
 - [RFC-0009: Operating-system sandbox](docs/rfcs/RFC-0009-sandbox.md)
+- [RFC-0010: Process execution](docs/rfcs/RFC-0010-exec.md)
 
-The RFCs are part of the project. Findings are labelled as measured, observed
-in source, documented by a provider, or inferred. Quantitative claims carry a
-date and method because agent software changes too quickly for folklore to be
-a sound dependency.
+RFC-0007 is reserved for the interactive terminal interface and is not yet
+written.
+
+The RFCs are part of the project. Findings are labelled as measured, observed in
+source, documented by a provider, or inferred. Quantitative claims carry a date
+and method because agent software changes too quickly for folklore to be a sound
+dependency. Where a design was wrong and had to be corrected, the RFC records
+the correction rather than quietly reading as though it were right all along.
 
 ## Development
 
 ```console
 cargo test --workspace
-cargo run -p gyr-cli -- models
-cargo run -p gyr-cli -- prompt --model claude-opus
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-Running against a model needs that provider's credential in the environment:
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `QWEN_API_BASE` for a self-hosted
-vLLM or SGLang endpoint. A missing one fails before any request is sent.
+Eight crates:
 
-```console
-export ANTHROPIC_API_KEY=...
-gyr run --model claude-opus "what does gyr-core::Agent::run guarantee?"
-```
+- `gyr-protocol` — values crossing crate and frontend boundaries.
+- `gyr-model` — provider session traits and the explicit model catalogue.
+- `gyr-core` — the act-observe loop, approval, the session log, the workspace
+  fence and the system prompt.
+- `gyr-tools` — workspace filesystem tools and their hard output limits.
+- `gyr-sandbox` — operating-system containment. Rewrites a command; never spawns.
+- `gyr-exec` — the process runner and the `exec` tool.
+- `gyr-rust` — the `cargo` tool and diagnostic parsing.
+- `gyr-cli` — the `gyr` executable, its renderer and its approval prompt.
 
-Mutations ask before they happen, and so does every `cargo` call, which is
-classified as a process, never auto-allowed, and run inside the sandbox.
-A sandboxed run has no network, so Cargo runs `--offline` and cannot fetch a
-dependency that is not already in the local registry cache. `--read-only` refuses both
-instead, and `--dangerously-allow-all` does not ask, which is a decision worth
-making deliberately. Every run writes `.gyr/sessions/<id>.jsonl`.
-
-A small local model is included as a development target so the loop can be
-driven by real inference without a hosted credential. It is not a coding target
-and `gyr models` labels it accordingly:
-
-```console
-gyr run --model qwen3-8b --api-base http://thinkpad.local:11434/v1 \
-        --no-thinking --read-only "what is in src/lib.rs?"
-```
-
-Ollama serves a context far smaller than the model's native window unless
-`num_ctx` is raised, which truncates the system prompt and tool schemas without
-saying so. See RFC-0003 section 3.1 for what has and has not been measured
-there.
-
-The command is `gyr`; Gyrfalcon is the project.
+Tests that invoke a real `cargo` build a dependency-free fixture in a temporary
+directory, so they need a toolchain but no network. Tests that exercise the
+sandbox are gated to macOS.
 
 ## Licence
 

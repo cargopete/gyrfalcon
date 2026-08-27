@@ -14,6 +14,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 gyr-core.workspace = true
+gyr-exec.workspace = true
 gyr-model.workspace = true
 gyr-protocol.workspace = true
 gyr-rust.workspace = true

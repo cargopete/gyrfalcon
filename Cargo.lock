@@ -498,6 +498,7 @@ dependencies = [
  "anyhow",
  "clap",
  "gyr-core",
+ "gyr-exec",
  "gyr-model",
  "gyr-protocol",
  "gyr-rust",
@@ -521,6 +522,19 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "gyr-exec"
+version = "0.1.0"
+dependencies = [
+ "gyr-core",
+ "gyr-protocol",
+ "gyr-sandbox",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -552,6 +566,7 @@ name = "gyr-rust"
 version = "0.1.0"
 dependencies = [
  "gyr-core",
+ "gyr-exec",
  "gyr-protocol",
  "gyr-sandbox",
  "pretty_assertions",

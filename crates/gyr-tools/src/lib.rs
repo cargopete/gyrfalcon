@@ -3,15 +3,14 @@
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::Component;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use gyr_core::ToolError;
 use gyr_core::ToolFuture;
 use gyr_core::ToolRuntime;
+use gyr_core::workspace::WorkspaceRoot;
 use gyr_protocol::ToolAction;
 use gyr_protocol::ToolCall;
 use gyr_protocol::ToolDefinition;
@@ -51,7 +50,7 @@ impl Default for ToolLimits {
 
 #[derive(Debug)]
 pub struct WorkspaceTools {
-    root: PathBuf,
+    root: WorkspaceRoot,
     limits: ToolLimits,
 }
 
@@ -63,19 +62,10 @@ impl WorkspaceTools {
     /// Returns an error when the root cannot be canonicalised or is not a
     /// directory.
     pub fn new(root: impl AsRef<Path>, limits: ToolLimits) -> Result<Self, ToolError> {
-        let root = fs::canonicalize(root.as_ref()).map_err(|error| {
-            ToolError::new(format!(
-                "cannot resolve workspace root {}: {error}",
-                root.as_ref().display()
-            ))
-        })?;
-        if !root.is_dir() {
-            return Err(ToolError::new(format!(
-                "workspace root is not a directory: {}",
-                root.display()
-            )));
-        }
-        Ok(Self { root, limits })
+        Ok(Self {
+            root: WorkspaceRoot::new(root)?,
+            limits,
+        })
     }
 
     #[must_use]
@@ -148,10 +138,8 @@ impl WorkspaceTools {
             }
             "apply_patch" => {
                 let arguments: PatchArguments = parse_arguments(&call.arguments, "apply_patch")?;
-                let resolved = self.resolve_existing_file(&arguments.path)?;
-                Ok(ToolAction::mutating(display_relative(
-                    &self.root, &resolved,
-                )?))
+                let resolved = self.root.resolve_file(&arguments.path)?;
+                Ok(ToolAction::mutating(self.root.relative(&resolved)?))
             }
             name => Err(ToolError::new(format!("unknown tool {name:?}"))),
         }
@@ -167,7 +155,7 @@ impl WorkspaceTools {
     }
 
     fn read(&self, arguments: ReadArguments) -> Result<ToolOutput, ToolError> {
-        let path = self.resolve_existing_file(&arguments.path)?;
+        let path = self.root.resolve_file(&arguments.path)?;
         let bytes = fs::read(&path).map_err(|error| file_error("read", &path, &error))?;
         let text = String::from_utf8(bytes.clone())
             .map_err(|_| ToolError::new(format!("file is not valid UTF-8: {}", arguments.path)))?;
@@ -222,7 +210,7 @@ impl WorkspaceTools {
             return Err(ToolError::new("search query must not be empty"));
         }
         let relative_root = arguments.path.as_deref().unwrap_or(".");
-        let search_root = self.resolve_existing_directory(relative_root)?;
+        let search_root = self.root.resolve_directory(relative_root)?;
         let result_limit = arguments
             .max_results
             .unwrap_or(self.limits.max_search_matches)
@@ -262,7 +250,7 @@ impl WorkspaceTools {
                         continue;
                     }
                     let found = SearchMatch {
-                        path: display_relative(&self.root, entry.path())?,
+                        path: self.root.relative(entry.path())?,
                         line: line_index + 1,
                         column: column + 1,
                         text: line.to_owned(),
@@ -298,7 +286,7 @@ impl WorkspaceTools {
         if arguments.old_text == arguments.new_text {
             return Err(ToolError::new("patch would not change the file"));
         }
-        let path = self.resolve_existing_file(&arguments.path)?;
+        let path = self.root.resolve_file(&arguments.path)?;
         let bytes = fs::read(&path).map_err(|error| file_error("read", &path, &error))?;
         let before_sha256 = fingerprint(&bytes);
         if before_sha256 != arguments.expected_sha256 {
@@ -325,47 +313,6 @@ impl WorkspaceTools {
             bytes_written: updated.len(),
         };
         json_output(&output)
-    }
-
-    fn resolve_existing_file(&self, path: &str) -> Result<PathBuf, ToolError> {
-        let resolved = self.resolve_existing(path)?;
-        if !resolved.is_file() {
-            return Err(ToolError::new(format!("path is not a file: {path}")));
-        }
-        Ok(resolved)
-    }
-
-    fn resolve_existing_directory(&self, path: &str) -> Result<PathBuf, ToolError> {
-        let resolved = self.resolve_existing(path)?;
-        if !resolved.is_dir() {
-            return Err(ToolError::new(format!("path is not a directory: {path}")));
-        }
-        Ok(resolved)
-    }
-
-    fn resolve_existing(&self, path: &str) -> Result<PathBuf, ToolError> {
-        let relative = Path::new(path);
-        if relative.as_os_str().is_empty()
-            || relative.is_absolute()
-            || relative.components().any(|component| {
-                matches!(
-                    component,
-                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                )
-            })
-        {
-            return Err(ToolError::new(format!(
-                "path must be relative and remain inside the workspace: {path}"
-            )));
-        }
-        let resolved = fs::canonicalize(self.root.join(relative))
-            .map_err(|error| ToolError::new(format!("cannot resolve {path}: {error}")))?;
-        if !resolved.starts_with(&self.root) {
-            return Err(ToolError::new(format!(
-                "resolved path escapes the workspace: {path}"
-            )));
-        }
-        Ok(resolved)
     }
 }
 
@@ -421,17 +368,6 @@ fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
     }
     value.truncate(boundary);
     true
-}
-
-fn display_relative(root: &Path, path: &Path) -> Result<String, ToolError> {
-    path.strip_prefix(root)
-        .map(|relative| relative.to_string_lossy().into_owned())
-        .map_err(|_| {
-            ToolError::new(format!(
-                "search result escaped workspace: {}",
-                path.display()
-            ))
-        })
 }
 
 fn file_error(action: &str, path: &Path, error: &std::io::Error) -> ToolError {
@@ -546,6 +482,8 @@ struct PatchOutput {
 mod tests {
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
+
+    use std::path::PathBuf;
 
     use gyr_protocol::ToolCall;
     use serde_json::json;

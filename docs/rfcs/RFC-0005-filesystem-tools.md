@@ -31,6 +31,11 @@ model path must be relative, non-empty and free of parent, root or platform
 prefix components. Existing targets are canonicalised and required to remain
 beneath the canonical root.
 
+**Amended 2026-08-27.** This rule now lives in `gyr-core::workspace` because
+`exec` needs the same one for its working directory, and two implementations of
+one security check is how they come to disagree. The tests below did not move;
+they now cover the shared implementation.
+
 Directory walking never follows symbolic links. Direct read and edit calls do
 canonicalise symbolic links, then reject a target outside the root. Tests cover
 both `..` traversal and an in-root symlink to an outside file.
