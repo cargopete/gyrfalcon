@@ -46,7 +46,18 @@ Tool discipline:
   is not unique, include enough surrounding context to make it unique rather
   than guessing which occurrence the tool will choose. It will not guess either.
 - `search` is literal, not a regular expression, and is bounded. An empty result
-  is a fact about the search, not proof that nothing exists.";
+  is a fact about the search, not proof that nothing exists.
+- `cargo` returns parsed diagnostics. Read the `counts`, which describe the whole
+  run, before reading the `diagnostics` list, which may have been capped;
+  `dropped_diagnostics` says how many are missing. A green build with no
+  material change is not success.
+- `exec` runs one program with one argument vector. There is no shell: no pipes,
+  no redirection, no globbing, no `&&`. Use a program's own flags instead of a
+  pipeline, and prefer `read` and `search` over `cat` and `grep`.
+- Processes may be confined. Where they are, they cannot write outside the
+  workspace or reach the network, so anything needing either will fail for that
+  reason rather than because you did it wrong. Say so plainly instead of trying
+  a second spelling of the same command.";
 
 /// Workspace facts injected beneath the static prompt.
 #[derive(Debug, Clone)]
