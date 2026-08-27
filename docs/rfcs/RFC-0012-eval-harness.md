@@ -259,6 +259,33 @@ change did what it was supposed to and cost nothing. Two runs is not a
 methodology, but it is the shape the methodology has to take, and this is the
 first time this repository has closed that loop rather than reasoned about it.
 
+### 9.5 A seventh case, and a design put in doubt
+
+`thread-a-result` was written to test one thing: whether the gate goes unused
+because no case in the corpus is hard enough to need it. It changes a `u32`
+return into a `Result` across three files, where which call sites can propagate
+and which cannot is knowable from the compiler and not from grep.
+
+It passed, in twelve turns for about fifteen pence, and the code it produced was
+idiomatic. And it did use the gate, which is what makes the result useful: the
+model called `gate start` **after** applying all three patches, got `unchanged`,
+and ran `cargo check` anyway.
+
+Difficulty was not the missing ingredient. The model reaches for the gate as a
+terminal verifier, and RFC-0011 built a mid-batch progress tracker. That doubt
+is written up in RFC-0011 section 12.1, along with what would settle it, none of
+which has been run.
+
+The run also found a bug: `unchanged`'s message accused the model of having
+fixed nothing, when it had fixed everything before the baseline was taken. That
+is RFC-0011 section 12.2.
+
+Two things worth naming about this. It is the first eval finding that is
+uncomfortable for a design decision in this repository rather than for a case in
+its corpus, which is what the corpus is for and is a good deal less pleasant
+than the previous four. And the case was written to confirm a hypothesis and
+refuted it instead, which is the only reason writing it was worth the money.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is
@@ -269,6 +296,7 @@ first time this repository has closed that loop rather than reasoned about it.
   which is the question the corpus exists to start answering about itself.
 - ~~Whether the missing capability behind the corpus's one `exec` call is a
   `list` tool.~~ Answered in section 9.4: it was.
-- Whether the system prompt should ask for a mid-batch gate check, given that a
-  model which reads before editing never reaches a state the gate could help
-  with. Section 9.3.
+- Whether the system prompt should ask for a mid-batch gate check. Sections 9.3
+  and 9.5, and RFC-0011 section 12.1: the evidence now says the model uses the
+  gate as a verifier rather than a tracker, so the question is whether asking
+  changes that and whether the change is worth a compile.

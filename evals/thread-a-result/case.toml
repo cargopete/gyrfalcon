@@ -1,0 +1,43 @@
+name = "thread-a-result"
+prompt = """
+`parse_value` currently swallows failures by returning 0. Change it to return \
+`Result<u32, ParseError>`, returning an error holding the offending text, and \
+thread that through every caller. When you are done these three signatures must \
+hold and `cargo check` must be clean:
+
+  pub fn parse_value(text: &str) -> Result<u32, ParseError>
+  pub fn sum_all(lines: &[&str]) -> Result<u32, ParseError>
+  pub fn describe(text: &str) -> Result<String, ParseError>
+
+Do not use unwrap, expect, or unwrap_or anywhere.
+"""
+max_turns = 24
+
+[expect]
+cargo_check = "clean"
+files_changed = ["src/parse.rs", "src/sum.rs", "src/report.rs"]
+files_unchanged = ["Cargo.toml", "src/error.rs"]
+
+[[expect.contains]]
+file = "src/parse.rs"
+text = "Result<u32, ParseError>"
+
+[[expect.contains]]
+file = "src/sum.rs"
+text = "pub fn sum_all(lines: &[&str]) -> Result<u32, ParseError>"
+
+[[expect.contains]]
+file = "src/report.rs"
+text = "pub fn describe(text: &str) -> Result<String, ParseError>"
+
+[[expect.not_contains]]
+file = "src/sum.rs"
+text = "unwrap"
+
+[[expect.not_contains]]
+file = "src/report.rs"
+text = "unwrap"
+
+[[expect.not_contains]]
+file = "src/parse.rs"
+text = "unwrap"

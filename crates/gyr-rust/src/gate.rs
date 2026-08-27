@@ -157,8 +157,9 @@ impl Verdict {
         match self {
             Self::Green => "No errors, and the workspace changed. This batch is done.",
             Self::Unchanged => {
-                "No errors, but no file changed since the baseline. Nothing was fixed here; \
-                 a green build with no material diff is not success."
+                "The build is clean and no file has changed since the baseline. Either nothing \
+                 needed doing, or the baseline was taken after the work: this verdict cannot \
+                 see edits made before start was called."
             }
             Self::Improving => "Fewer distinct errors than at the last check. Keep going.",
             Self::Regressing => {
@@ -344,11 +345,12 @@ impl ToolRuntime for GateTool {
         vec![ToolDefinition {
             name: "gate".into(),
             description: format!(
-                "Track whether an edit batch is making measurable progress. Call start before \
-                 editing to record a baseline, then check after every few edits. A batch may \
-                 pass through a state that does not compile; what matters is whether the \
-                 distinct error set is shrinking. Verdicts: green, unchanged, improving, \
-                 regressing, stalled, exhausted. Runs {}.",
+                "Track whether an edit batch is making measurable progress. Call start BEFORE \
+                 your first edit, then check after every few edits. A baseline taken after the \
+                 work cannot see that work and will report unchanged, which tells you nothing. \
+                 A batch may pass through a state that does not compile; what matters is \
+                 whether the distinct error set is shrinking. Verdicts: green, unchanged, \
+                 improving, regressing, stalled, exhausted. Runs {}.",
                 self.cargo.check_subject()
             ),
             input_schema: json!({

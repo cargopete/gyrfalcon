@@ -89,8 +89,9 @@ rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Conversation state across process restarts. Log replay. Compaction. A
 configuration file.
 
-The eval corpus is six cases long, which is a start rather than a corpus. All
-six pass against `claude-sonnet-5` for about twenty-seven pence a run.
+The eval corpus is seven cases long, which is a start rather than a corpus. All
+seven pass against `claude-sonnet-5`, the six-case sweep costing about
+twenty-seven pence a run.
 
 It has already changed this repository's mind twice, both times about Gyrfalcon
 rather than about any model.
@@ -103,13 +104,20 @@ zero while `list` was reached for in two cases, with six of six still passing.
 A finding produced a change and the corpus confirmed the change. That loop
 closing is the point of the whole exercise.
 
-The other belief is less comfortable. The gate was called in one case of six,
-and the case built specifically to force a red state passed through one without
-the model ever looking, because it read three files before editing any of them.
-The gate helps a model that checks mid-batch; whether to ask for that comes
-before tuning it.
+The other belief is a good deal less comfortable, and it is about a design
+decision in this repository rather than about a case in its corpus. The gate was
+called in one case of six. A harder seventh case was then written specifically
+to see whether difficulty was the missing ingredient, and the model did use the
+gate — after finishing, taking its baseline from the already-fixed code, and
+then running `cargo check` anyway. So this model reaches for the gate as a
+terminal verifier, and `cargo check` is already one. RFC-0011 built a mid-batch
+progress tracker for a model that checks as it goes.
 
-RFC-0012 sections 9.2 through 9.4 have all of it, including the first live run,
+The gate is built, correct, tested, and may be solving a problem this class of
+model does not have. RFC-0011 section 12.1 says so and lists what would settle
+it, none of which has been run.
+
+RFC-0012 sections 9.2 through 9.5 have all of it, including the first live run,
 where the thing the corpus found was a badly written case rather than anything
 about the model.
 

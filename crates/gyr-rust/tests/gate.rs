@@ -191,6 +191,17 @@ async fn a_green_build_that_changed_nothing_is_not_success() {
     assert_eq!(report["verdict"], "unchanged");
     assert_eq!(report["current"]["errors"], 0);
     assert_eq!(report["files_changed"], 0);
+    // The message must name its own blind spot. A live run caught a model
+    // taking its baseline after finishing the work, where the old wording
+    // ("nothing was fixed here") was flatly untrue.
+    assert!(
+        report["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot see edits made before start"),
+        "said: {}",
+        report["message"]
+    );
 }
 
 #[tokio::test]

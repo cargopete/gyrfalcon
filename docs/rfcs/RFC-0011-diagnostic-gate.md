@@ -183,13 +183,56 @@ than at the last check. Keep going."
 
 - Whether `exhausted` should be two consecutive checks or a ratio over the
   batch. RFC-0012 records every gate verdict per case, so this is now a query
-  against a corpus rather than an opinion.
-- **A prior question, raised by RFC-0012 section 9.3.** Across six live cases the
-  gate was called in one, and the case built specifically to force a red state
-  did pass through one without the model ever looking: it read three files,
-  applied three patches, then checked once. The gate helps a model that checks
-  mid-batch. Whether the system prompt should ask for that, and whether it would
-  buy anything for the compile it costs, comes before tuning the threshold.
+  against a corpus rather than an opinion. It is also the wrong question to ask
+  next; see below.
+
+### 12.1 The premise is in doubt
+
+**Two live findings, recorded on 2026-08-27, and they point the same way.**
+
+Across six cases (RFC-0012 section 9.3) the gate was called in one. The case
+built specifically to force a red state passed through one without the model
+ever looking: it read three files, applied three patches, then ran `cargo check`
+once.
+
+A harder case was then written to see whether difficulty was the missing
+ingredient: a `u32` return threaded into a `Result` across three files, where
+which call sites can propagate and which cannot is a thing the compiler knows
+and grep does not. The model used the gate. It used it **after finishing**: five
+reads, three patches, three verifying searches, then `gate start`, then
+`gate check`, then `cargo check`.
+
+The baseline was therefore taken from the finished code, the verdict was
+`unchanged`, and the model ran `cargo check` immediately afterwards anyway.
+
+So the shape of the evidence is not "the gate is unused". It is that **this
+model reaches for the gate as a terminal verifier, and `cargo check` is already
+one.** RFC-0001 section 7 designed a progress tracker for a model that checks
+mid-batch. Twice now the observed behaviour has been to read everything, edit
+everything, and check once at the end, which is a strategy the gate adds nothing
+to.
+
+That is a doubt about the premise rather than about the implementation, and it
+is not settled by two observations. What would settle it, in rough order of
+cost: a system prompt that asks for a mid-batch check, measured before and
+after; a case large enough that reading everything first is not affordable; and
+a model that is worse at planning, where the red state is entered by accident
+rather than by design. None of those has been run.
+
+The honest position in the meantime is that the gate is built, correct, tested,
+and may be solving a problem this class of model does not have.
+
+### 12.2 A bug the same run found
+
+`Unchanged`'s message read "Nothing was fixed here; a green build with no
+material diff is not success." Against a baseline taken after the work, that is
+flatly untrue: everything had been fixed, and the gate could not see it.
+
+The gate cannot know what happened before `start`, so the message now says so,
+and the tool description now says to call `start` before the first edit and what
+happens if you do not. A verdict that overstates what it knows is worse than one
+that says less, and this one was overstating in the direction of accusing a
+model of doing nothing.
 - Whether a warning that was an error a moment ago should count as resolved,
   which it currently does, and whether that lets a batch launder errors into
   allow attributes.
