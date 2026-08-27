@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | implemented M3 (macOS); Linux written M6, unverified |
+| Status | implemented M3 (macOS) and M6 (Linux) |
 | Date | 2026-08-27 |
 | Depends on | RFC-0001, RFC-0006, RFC-0008 |
 | Scope | the sandbox seam, macOS Seatbelt, honest unavailability elsewhere |
@@ -203,9 +203,21 @@ unit tests without them would be a green light for the wrong reason.
 
 ### 5.3 What was written, 2026-08-27
 
-Steps 2 and 3, on a machine with no Linux on it. Every claim below is a claim
-about code that compiles and about tests that have not yet run on the platform
-they are for. CI is the arbiter and this section is written before its verdict.
+Steps 2 and 3, on a machine with no Linux on it. This section was written before
+CI had returned a verdict, deliberately, so that what follows could not be
+tidied up afterwards to match the result.
+
+**The verdict, appended after the fact: all six confinement tests ran on
+`ubuntu-latest` and passed.** Not only the escape tests. The pair that matters
+is `a_confined_command_cannot_write_outside_the_workspace` passing alongside
+`a_confined_command_may_still_write_inside_the_workspace`, because the first
+alone would also pass against a sandbox that refused everything. Cargo, rustc
+and a build script writing to `OUT_DIR` all run under the ruleset, doctests get
+their workspace-local `TMPDIR`, and `curl` returns nothing.
+
+So the Linux boundary is verified rather than asserted, on a real kernel, by a
+job that costs nothing and needed no hardware. That was the whole argument for
+putting CI before the code.
 
 `gyr-confine` takes `--allow-write <path>...` and `-- <program> [args]`, builds a
 Landlock ruleset at ABI 4, grants read on `/` and full access under each
@@ -273,8 +285,13 @@ consulted. The sandbox is a second boundary, not a replacement for the first.
   passes because the fixture failed to compile is worse than no test.
 - On macOS, `cargo test` inside the sandbox passes including doctests, which is
   the workspace-local `TMPDIR` doing its job.
-- Non-macOS platforms: a `cfg`-gated test asserts detection reports
-  unavailability naming the operating system, rather than falling back.
+- Platforms with neither implementation: a `cfg`-gated test asserts detection
+  reports unavailability naming the operating system, rather than falling back.
+- On Linux, the same six confinement tests as macOS, run on `ubuntu-latest`
+  (kernel 6.17, Landlock ABI 7): writes outside the workspace refused, writes
+  inside allowed, the network unreachable, a build script confined, Cargo and
+  doctests working under the ruleset. A helper that cannot be found reports
+  unavailable rather than running the command unwrapped.
 
 **Observed on 2026-08-27**, driving the built `gyr` binary against a local fake
 endpoint over a fixture with a type error: the approval prompt names the full
@@ -282,8 +299,8 @@ command and the containment, the session log's opening record carries
 `workspace (seatbelt: writes confined, network denied)`, and the model receives
 576 bytes naming `E0308`.
 
-The Linux path has no implementation and therefore no test beyond the one that
-proves it refuses. That is a gap, not a passing grade.
+Windows has no implementation and therefore no test beyond the one that proves
+it refuses. That is a gap, not a passing grade.
 
 **Observed on 2026-08-27** while designing the profile, using `sandbox-exec`
 directly rather than through Gyrfalcon:

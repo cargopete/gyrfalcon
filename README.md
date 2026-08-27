@@ -64,12 +64,17 @@ CI and evals.
 
 ### What is enforced, and what is not
 
-On macOS every process runs inside a Seatbelt sandbox that confines writes to
-the workspace and denies the network. **It does not confine reads.** A build
-script can still read a credential file; what it cannot do is write it anywhere
-outside the workspace or transmit it. That combination is the guarantee, and
-RFC-0009 section 2 explains why a narrower read profile was rejected rather than
-attempted badly.
+On macOS and Linux every process runs inside an operating-system sandbox that
+confines writes to the workspace: Seatbelt on one, Landlock on the other, behind
+one trait. **Neither confines reads.** A build script can still read a
+credential file; what it cannot do is write it anywhere outside the workspace or
+transmit it. That combination is the guarantee, and RFC-0009 section 2 explains
+why a narrower read profile was rejected rather than attempted badly.
+
+The two are not identical and are not labelled as though they were. Seatbelt
+denies the network outright; Landlock ABI 4 denies TCP and leaves UDP open, so
+it says `TCP denied` rather than `network denied`. Making the weaker one wear
+the stronger one's words is the failure that document exists to avoid.
 
 One consequence is worth knowing because it is load-bearing. RFC-0001 lists
 automatic commits, pushes, deployments and purchases as non-goals. Under
@@ -82,19 +87,18 @@ run any process rather than quietly running it unconfined. `--sandbox none`
 remains available, is never the default, appears in the approval prompt as
 `unconfined`, and is written into the session log.
 
-Linux is decided but not built, and RFC-0009 section 5.1 records why each way:
-a small `gyr-confine` helper that applies Landlock to itself and then `exec`s,
-because Landlock restrictions inherit across `exec` and that needs no `unsafe`
+Linux needed a decision before it needed code, and RFC-0009 section 5.1 records
+it: a small `gyr-confine` helper that applies Landlock to itself and then
+`exec`s, because restrictions inherit across `exec` and that needs no `unsafe`
 where applying them to a child would; a floor of kernel 6.7, because one
 mechanism that can be verified beats two that can each be half-verified; and no
-code until the escape tests run on a real kernel, because an unverifiable
-security boundary is the thing this repository keeps refusing to write. CI
-reports the hosted runner at kernel 6.17 with Landlock ABI 7, so the floor is
-reachable and the blocker is now only the work.
+code until the escape tests run on a real kernel. All six confinement tests now
+run on both platforms in CI, including the pair that rules out a sandbox which
+simply refuses everything.
 
 ### What does not exist yet
 
-A sandbox on Linux (decided, not built) or Windows. Shells and pipelines. Rollback: the gate refuses
+A sandbox on Windows. Shells and pipelines. Rollback: the gate refuses
 rather than reverting, because a shadow copy of the workspace is a worse version
 of git. Conversation state across process restarts. Log replay. Compaction. A
 configuration file.
@@ -270,7 +274,7 @@ CI runs the first three on macOS and Linux. It found a cross-platform defect on
 its first Linux build, before it had been asked to do the thing it was added
 for.
 
-Nine crates:
+Ten crates:
 
 - `gyr-protocol` — values crossing crate and frontend boundaries.
 - `gyr-model` — provider session traits and the explicit model catalogue.
@@ -278,6 +282,7 @@ Nine crates:
   fence and the system prompt.
 - `gyr-tools` — workspace filesystem tools and their hard output limits.
 - `gyr-sandbox` — operating-system containment. Rewrites a command; never spawns.
+- `gyr-confine` — the Linux helper: restricts itself with Landlock, then `exec`s.
 - `gyr-exec` — the process runner and the `exec` tool.
 - `gyr-rust` — the `cargo` tool, diagnostic parsing and the gate.
 - `gyr-eval` — the case format, the runner and the metrics read from a log.
