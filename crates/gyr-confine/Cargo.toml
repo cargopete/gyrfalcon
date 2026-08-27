@@ -1,0 +1,17 @@
+[package]
+name = "gyr-confine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "gyr-confine"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+
+[lints]
+workspace = true

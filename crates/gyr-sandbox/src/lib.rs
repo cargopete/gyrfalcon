@@ -10,6 +10,7 @@
 //! guarantee, and RFC-0009 section 2 explains why a narrower read profile was
 //! rejected rather than attempted badly.
 
+mod landlock;
 mod seatbelt;
 
 use std::fmt::Debug;
@@ -17,6 +18,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
+pub use crate::landlock::Landlock;
 pub use crate::seatbelt::Seatbelt;
 
 #[derive(Debug, Error)]
@@ -104,6 +106,9 @@ pub fn detect(workspace: &Path) -> Result<Box<dyn Sandbox>, SandboxError> {
     if cfg!(target_os = "macos") {
         return Ok(Box::new(Seatbelt::new(workspace)?));
     }
+    if cfg!(target_os = "linux") {
+        return Ok(Box::new(Landlock::new(workspace)?));
+    }
     Err(SandboxError::Unavailable(format!(
         "{} has no Gyrfalcon sandbox yet; see RFC-0009 section 5",
         std::env::consts::OS
@@ -114,7 +119,7 @@ pub fn detect(workspace: &Path) -> Result<Box<dyn Sandbox>, SandboxError> {
 mod tests {
     use super::*;
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn detection_reports_unavailability_rather_than_falling_back() {
         let error = detect(Path::new(".")).unwrap_err();

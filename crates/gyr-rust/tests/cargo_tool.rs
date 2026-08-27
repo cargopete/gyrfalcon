@@ -62,7 +62,7 @@ impl Fixture {
 
     // Gated with its callers. Left ungated it is dead code everywhere the
     // sandbox is unimplemented, which is what CI caught on its first Linux run.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn sandboxed(&self) -> CargoTool {
         let sandbox = gyr_sandbox::detect(&self.path).expect("a sandbox on this platform");
         self.tool_with(CargoLimits::default(), Arc::from(sandbox))
@@ -287,7 +287,7 @@ fn a_directory_without_a_manifest_is_refused_at_construction() {
     assert!(error.to_string().contains("no Cargo.toml"));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn a_confined_check_still_runs_a_build_script() {
     const BUILD_SCRIPT: &str = r#"
@@ -317,7 +317,7 @@ fn main() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn a_confined_build_script_cannot_write_outside_the_workspace() {
     let escape = std::env::temp_dir().join(format!("gyrfalcon-escape-{}", std::process::id()));
@@ -355,14 +355,16 @@ async fn a_confined_build_script_cannot_write_outside_the_workspace() {
         "{rendered}{}",
         output["output"].as_str().unwrap_or_default()
     );
+    // Seatbelt refuses with EPERM and Landlock with EACCES.
     assert!(
         evidence.contains("the sandbox let it through")
-            && evidence.contains("Operation not permitted"),
+            && (evidence.contains("Operation not permitted")
+                || evidence.contains("Permission denied")),
         "the build script failed for some other reason: {evidence}"
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn a_confined_run_gets_a_temporary_directory_inside_the_workspace() {
     let fixture = Fixture::new("pub fn n() -> u32 { 2 }\n");

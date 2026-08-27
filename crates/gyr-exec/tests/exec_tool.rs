@@ -47,7 +47,7 @@ impl Fixture {
         ExecTool::new(&self.path, limits, sandbox).unwrap()
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn sandboxed(&self) -> ExecTool {
         let sandbox = gyr_sandbox::detect(&self.path).expect("a sandbox on this platform");
         self.tool_with(ExecLimits::default(), Arc::from(sandbox))
@@ -274,7 +274,7 @@ async fn the_wall_clock_kills_a_sleeping_child() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn a_confined_command_cannot_write_outside_the_workspace() {
     let fixture = Fixture::new();
@@ -293,13 +293,12 @@ async fn a_confined_command_cannot_write_outside_the_workspace() {
     let output = parse(&output);
 
     assert_ne!(output["exit_code"], 0, "the write must have failed");
+    // Seatbelt refuses with EPERM and Landlock with EACCES, so the test asks
+    // for a refusal rather than for one platform's wording.
+    let stderr = output["stderr"].as_str().unwrap();
     assert!(
-        output["stderr"]
-            .as_str()
-            .unwrap()
-            .contains("Operation not permitted"),
-        "it failed for some other reason: {}",
-        output["stderr"]
+        stderr.contains("Operation not permitted") || stderr.contains("Permission denied"),
+        "it failed for some other reason: {stderr}"
     );
     assert!(
         !escape.exists(),
@@ -308,7 +307,7 @@ async fn a_confined_command_cannot_write_outside_the_workspace() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn a_confined_command_cannot_reach_the_network() {
     let fixture = Fixture::new();
@@ -328,7 +327,7 @@ async fn a_confined_command_cannot_reach_the_network() {
     assert_eq!(output["stdout"], "");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn a_confined_command_may_still_write_inside_the_workspace() {
     let fixture = Fixture::new();

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | implemented M3 (macOS only) |
+| Status | implemented M3 (macOS); Linux written M6, unverified |
 | Date | 2026-08-27 |
 | Depends on | RFC-0001, RFC-0006, RFC-0008 |
 | Scope | the sandbox seam, macOS Seatbelt, honest unavailability elsewhere |
@@ -201,6 +201,46 @@ unit tests without them would be a green light for the wrong reason.
 3. `Seatbelt` and the new implementation behind the same `detect`, with the
    kernel-floor refusal message naming 6.7.
 
+### 5.3 What was written, 2026-08-27
+
+Steps 2 and 3, on a machine with no Linux on it. Every claim below is a claim
+about code that compiles and about tests that have not yet run on the platform
+they are for. CI is the arbiter and this section is written before its verdict.
+
+`gyr-confine` takes `--allow-write <path>...` and `-- <program> [args]`, builds a
+Landlock ruleset at ABI 4, grants read on `/` and full access under each
+writable path, adds no network rule, restricts itself, and `exec`s. Two details
+carry the weight:
+
+- **`CompatLevel::HardRequirement`.** The `landlock` crate defaults to best
+  effort, which on an older kernel enforces whatever it can and says nothing.
+  The whole point of a floor is that falling below it is an error, so the
+  compatibility level is set explicitly and `restrict_self` must report
+  `FullyEnforced` or the helper refuses to exec.
+- **No unsafe anywhere.** Restricting oneself and then calling
+  `CommandExt::exec` are both safe. That was the argument for a helper in
+  section 5.1 and it survived contact with the code.
+
+`Landlock` in `gyr-sandbox` locates the helper beside the running executable,
+then one directory up because a test binary lives in `deps/`, then on `PATH`,
+with `GYR_CONFINE` overriding for packaging. A helper that cannot be found is
+`Unavailable`; it never degrades into running the command unwrapped.
+
+**The Linux guarantee is weaker than the macOS one, and is labelled as such.**
+Landlock ABI 4 restricts TCP bind and connect. It does not restrict UDP, so a
+confined child can still reach a DNS resolver and, with effort, talk through it.
+The Seatbelt profile denies everything. So the two labels differ:
+`workspace (seatbelt: writes confined, network denied)` against
+`workspace (landlock: writes confined, TCP denied)`. Making the weaker one wear
+the stronger one's words would be the exact failure this document exists to
+avoid. Closing the gap means seccomp filtering on `socket(AF_INET, SOCK_DGRAM)`,
+which is the second mechanism section 5.1 declined, and it is recorded as a gap
+rather than smuggled in.
+
+The three escape tests now run on both platforms rather than only on macOS,
+asking for a refusal rather than for one platform's wording, because Seatbelt
+refuses with `EPERM` and Landlock with `EACCES`.
+
 If step 1 reports a runner without Landlock, the floor decision stands and the
 vehicle changes; the decision that must not change is that the code waits for
 the test.
@@ -260,6 +300,9 @@ directly rather than through Gyrfalcon:
 
 ## 8. Open questions
 
+- Whether Landlock's open UDP path is worth a seccomp filter, which would mean
+  the second mechanism section 5.1 declined, or whether the honest label is
+  enough. Section 5.3.
 - Whether a network-enabled mode is worth the `CARGO_HOME` write it requires,
   and whether a per-run registry overlay is a better answer than either.
 - ~~Whether the Linux implementation should be an external launcher, a small

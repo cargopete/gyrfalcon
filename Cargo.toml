@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/gyr-cli",
+    "crates/gyr-confine",
     "crates/gyr-core",
     "crates/gyr-eval",
     "crates/gyr-exec",
@@ -34,6 +35,7 @@ gyr-rust = { path = "crates/gyr-rust" }
 gyr-sandbox = { path = "crates/gyr-sandbox" }
 gyr-tools = { path = "crates/gyr-tools" }
 ignore = "0.4.33"
+landlock = "0.4.4"
 pretty_assertions = "1.4.1"
 rustyline = { version = "17.0.2", default-features = false, features = ["with-file-history"] }
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls", "stream"] }
