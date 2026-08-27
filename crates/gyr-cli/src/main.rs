@@ -5,6 +5,7 @@ mod config;
 mod evals;
 mod render;
 mod session;
+mod settings;
 mod style;
 
 use std::io::IsTerminal;
@@ -56,6 +57,8 @@ use crate::config::RunSettings;
 use crate::config::SandboxMode;
 use crate::render::Renderer;
 use crate::session::Session;
+use crate::settings::Layers;
+use crate::settings::Source;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -86,12 +89,14 @@ enum Command {
     Run(RunArgs),
     /// Run the eval corpus against a model.
     Eval(crate::evals::EvalArgs),
+    /// Show every setting, its value, and where that value came from.
+    Config(PromptArgs),
 }
 
 // These are switches rather than a state machine because each one means one
 // thing to a person reading `--help`.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Default, clap::Args)]
 struct CommonArgs {
     /// Model key from `gyr models`. Defaults to `GYR_MODEL`.
     #[arg(long)]
@@ -102,18 +107,19 @@ struct CommonArgs {
     /// Session log path. Defaults to .gyr/sessions/<id>.jsonl in the workspace.
     #[arg(long)]
     log: Option<PathBuf>,
-    /// Safety limit on model turns in one submission.
-    #[arg(long, default_value = "32")]
-    max_turns: NonZeroU32,
+    /// Safety limit on model turns in one submission. Default 32.
+    #[arg(long)]
+    max_turns: Option<NonZeroU32>,
     /// Refuse every mutation and every process instead of asking.
     #[arg(long, conflicts_with = "dangerously_allow_all")]
     read_only: bool,
     /// Approve everything without asking. Consider this carefully.
     #[arg(long)]
     dangerously_allow_all: bool,
-    /// Operating-system containment for processes this run starts.
-    #[arg(long, value_enum, default_value_t = SandboxMode::Workspace)]
-    sandbox: SandboxMode,
+    /// Operating-system containment for processes this run starts. Default
+    /// workspace.
+    #[arg(long, value_enum)]
+    sandbox: Option<SandboxMode>,
     /// Show streamed reasoning summaries where the provider sends them.
     #[arg(long)]
     show_reasoning: bool,
@@ -176,6 +182,10 @@ fn dispatch() -> Result<ExitCode> {
         }
         Some(Command::Run(args)) => on_runtime(run(args)),
         Some(Command::Eval(args)) => on_runtime(evals::run(args)),
+        Some(Command::Config(args)) => {
+            print_config(&args)?;
+            Ok(ExitCode::SUCCESS)
+        }
         None => on_runtime(session(cli.common)),
     }
 }
@@ -282,9 +292,11 @@ struct Prepared {
 }
 
 fn prepare(common: &CommonArgs) -> Result<Prepared> {
-    style::enable(common.plain);
     let session_id = SessionId::generate();
     let settings = settings(common, &session_id)?;
+    // After resolution rather than before, so a config file can ask for plain
+    // output as well as the flag.
+    style::enable(settings.plain);
 
     let sandbox = config::build_sandbox(settings.sandbox, &settings.workspace)?;
     let sandbox_label = sandbox.label();
@@ -436,16 +448,192 @@ fn save_state<S: ModelSession, T: gyr_core::ToolRuntime>(
     }
 }
 
-fn settings(args: &CommonArgs, session_id: &SessionId) -> Result<RunSettings> {
-    let profile = config::resolve_profile(args.model.as_deref())?;
-    let workspace = config::resolve_workspace(args.workspace.as_deref())?;
-    let mode = if args.dangerously_allow_all {
-        ApprovalMode::AllowAll
-    } else if args.read_only {
-        ApprovalMode::ReadOnly
+/// Everything a run needs, with each value's origin, for `gyr config`.
+struct Resolved {
+    model: (Option<String>, Source),
+    max_turns: (NonZeroU32, Source),
+    approvals: (ApprovalMode, Source),
+    sandbox: (SandboxMode, Source),
+    api_base: (Option<String>, Source),
+    show_reasoning: (bool, Source),
+    no_thinking: (bool, Source),
+    plain: (bool, Source),
+    layers: Layers,
+}
+
+/// Applies RFC-0015's precedence: flag, environment, project file, user file,
+/// default.
+fn resolve(args: &CommonArgs, workspace: &Path) -> Result<Resolved> {
+    let layers = Layers::load(workspace)?;
+
+    let model = if let Some(model) = args.model.clone() {
+        (Some(model), Source::Flag)
+    } else if let Ok(model) = std::env::var("GYR_MODEL") {
+        (Some(model), Source::Environment)
+    } else if let Some((model, source)) = layers.pick(|file| file.model.clone()) {
+        (Some(model), source)
     } else {
-        ApprovalMode::Interactive
+        (None, Source::Default)
     };
+
+    let approvals = if args.dangerously_allow_all {
+        (ApprovalMode::AllowAll, Source::Flag)
+    } else if args.read_only {
+        (ApprovalMode::ReadOnly, Source::Flag)
+    } else if let Some(found) = layers.pick_user_only(|file| file.approvals) {
+        found
+    } else {
+        (ApprovalMode::Interactive, Source::Default)
+    };
+
+    let api_base = if let Some(base) = args.api_base.clone() {
+        (Some(base), Source::Flag)
+    } else if let Ok(base) = std::env::var("QWEN_API_BASE") {
+        (Some(base), Source::Environment)
+    } else if let Some((base, source)) = layers.pick_user_only(|file| file.api_base.clone()) {
+        (Some(base), source)
+    } else {
+        (None, Source::Default)
+    };
+
+    // A flag can only turn these on, so a set flag is unambiguous and an unset
+    // one falls through to the files.
+    let switch = |flag: bool, choose: fn(&crate::settings::FileConfig) -> Option<bool>| {
+        if flag {
+            (true, Source::Flag)
+        } else {
+            layers
+                .pick(choose)
+                .map_or((false, Source::Default), |(value, source)| (value, source))
+        }
+    };
+
+    Ok(Resolved {
+        model,
+        max_turns: args.max_turns.map_or_else(
+            || {
+                layers.pick(|file| file.max_turns).unwrap_or((
+                    NonZeroU32::new(32).expect("32 is non-zero"),
+                    Source::Default,
+                ))
+            },
+            |turns| (turns, Source::Flag),
+        ),
+        approvals,
+        sandbox: args.sandbox.map_or_else(
+            || {
+                layers
+                    .pick_user_only(|file| file.sandbox)
+                    .unwrap_or((SandboxMode::Workspace, Source::Default))
+            },
+            |mode| (mode, Source::Flag),
+        ),
+        api_base,
+        show_reasoning: switch(args.show_reasoning, |file| file.show_reasoning),
+        no_thinking: switch(args.no_thinking, |file| file.no_thinking),
+        plain: switch(args.plain, |file| file.plain),
+        layers,
+    })
+}
+
+fn print_config(args: &PromptArgs) -> Result<()> {
+    let workspace = config::resolve_workspace(args.workspace.as_deref())?;
+    let common = CommonArgs {
+        model: args.model.clone(),
+        ..CommonArgs::default()
+    };
+    let resolved = resolve(&common, &workspace)?;
+
+    let show = |value: String, source: Source| format!("{value}  ({})", source.label());
+    let rows = vec![
+        (
+            "model",
+            show(
+                resolved.model.0.clone().unwrap_or_else(|| "unset".into()),
+                resolved.model.1,
+            ),
+        ),
+        (
+            "workspace",
+            format!("{}  (where you are)", workspace.display()),
+        ),
+        (
+            "approvals",
+            show(
+                resolved.approvals.0.label().to_owned(),
+                resolved.approvals.1,
+            ),
+        ),
+        (
+            "sandbox",
+            show(
+                format!("{:?}", resolved.sandbox.0).to_lowercase(),
+                resolved.sandbox.1,
+            ),
+        ),
+        (
+            "max turns",
+            show(resolved.max_turns.0.to_string(), resolved.max_turns.1),
+        ),
+        (
+            "api base",
+            show(
+                resolved
+                    .api_base
+                    .0
+                    .clone()
+                    .unwrap_or_else(|| "unset".into()),
+                resolved.api_base.1,
+            ),
+        ),
+        (
+            "reasoning",
+            show(
+                resolved.show_reasoning.0.to_string(),
+                resolved.show_reasoning.1,
+            ),
+        ),
+        (
+            "thinking off",
+            show(resolved.no_thinking.0.to_string(), resolved.no_thinking.1),
+        ),
+        (
+            "plain",
+            show(resolved.plain.0.to_string(), resolved.plain.1),
+        ),
+        (
+            "project file",
+            resolved
+                .layers
+                .project_path
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), |path| path.display().to_string()),
+        ),
+        (
+            "user file",
+            resolved
+                .layers
+                .user_path
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), |path| path.display().to_string()),
+        ),
+    ];
+    print!("{}", crate::render::status_block(&rows));
+    println!(
+        "{}",
+        style::paint(
+            style::FAINT,
+            "  a project file may not set approvals, sandbox or api base",
+        )
+    );
+    Ok(())
+}
+
+fn settings(args: &CommonArgs, session_id: &SessionId) -> Result<RunSettings> {
+    let workspace = config::resolve_workspace(args.workspace.as_deref())?;
+    let resolved = resolve(args, &workspace)?;
+    let profile = config::resolve_profile(resolved.model.0.as_deref())?;
+    let mode = resolved.approvals.0;
     let log_path = match &args.log {
         Some(path) => path.clone(),
         None => config::default_log_path(&workspace, session_id.as_str()),
@@ -454,12 +642,13 @@ fn settings(args: &CommonArgs, session_id: &SessionId) -> Result<RunSettings> {
         profile,
         workspace,
         log_path,
-        max_turns: args.max_turns,
+        max_turns: resolved.max_turns.0,
         mode,
-        sandbox: args.sandbox,
-        show_reasoning: args.show_reasoning,
-        api_base: args.api_base.clone(),
-        disable_thinking: args.no_thinking,
+        sandbox: resolved.sandbox.0,
+        show_reasoning: resolved.show_reasoning.0,
+        api_base: resolved.api_base.0,
+        disable_thinking: resolved.no_thinking.0,
+        plain: resolved.plain.0,
     })
 }
 

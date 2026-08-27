@@ -1,7 +1,8 @@
 //! Flags, environment and the provider session they select.
 //!
-//! There is no configuration file yet. Inventing one before the command surface
-//! has settled would only produce a format to regret.
+//! Configuration files arrived in RFC-0015, once the command surface had
+//! settled enough to mirror. `settings.rs` owns the layering; this module owns
+//! what a resolved setting turns into.
 
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -27,8 +28,9 @@ use gyr_sandbox::Sandbox;
 use gyr_sandbox::Unconfined;
 
 /// How much the operating system confines a process Gyrfalcon starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
 #[clap(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
     /// Writes confined to the workspace, network denied.
     Workspace,
@@ -36,7 +38,9 @@ pub enum SandboxMode {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[clap(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ApprovalMode {
     /// Read-only calls proceed; mutations ask a person.
     Interactive,
@@ -69,6 +73,9 @@ pub struct RunSettings {
     pub api_base: Option<String>,
     /// Asks a toggling model not to think. Absent leaves the server's default.
     pub disable_thinking: bool,
+    /// Emit no terminal colour. Resolved like everything else, so a config file
+    /// can ask for it.
+    pub plain: bool,
 }
 
 /// Resolves the model profile named by a flag or `GYR_MODEL`.
@@ -230,6 +237,7 @@ mod tests {
             show_reasoning: false,
             api_base: None,
             disable_thinking: false,
+            plain: true,
         }
     }
 

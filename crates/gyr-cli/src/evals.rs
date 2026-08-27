@@ -162,6 +162,7 @@ fn eval_settings(
         show_reasoning: false,
         api_base: args.api_base.clone(),
         disable_thinking: args.no_thinking,
+        plain: args.plain,
     }
 }
 
