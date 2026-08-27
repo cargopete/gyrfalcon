@@ -120,12 +120,7 @@ trade-off deserves its own design rather than a flag added in passing.
 
 ## 5. Elsewhere
 
-Linux has Landlock for filesystem confinement and needs seccomp or Landlock ABI
-4 for the network, and applying either to a child without an external launcher
-requires `pre_exec`, which the workspace forbids along with all unsafe code.
-That is a real design task, not an afternoon.
-
-Until it is done, `Sandbox::detect` reports unavailability on every platform
+Until Linux is built, `Sandbox::detect` reports unavailability on every platform
 that is not macOS, and a `Process` tool call is refused with a message naming
 the reason. `--sandbox none` remains available, is never the default, appears in
 the approval prompt as `unconfined`, and is written into the session log's
@@ -133,6 +128,70 @@ opening record. A person running unconfined should be able to tell from the log
 that they did.
 
 Windows is not addressed, per RFC-0001 section 8.
+
+### 5.1 Linux: three decisions, taken 2026-08-27
+
+These were open questions until now. They are recorded here rather than in a
+future session's head.
+
+**Mechanism: a `gyr-confine` helper binary. Not `bubblewrap`, and not an unsafe
+exemption.**
+
+Landlock applied to a *child* needs `Command::pre_exec`, which is `unsafe` and
+the workspace forbids it. That constraint evaporates one level down. A small
+second binary can apply a Landlock ruleset **to itself**, apply a seccomp filter
+to itself, then `exec` the real program: Landlock restrictions are inherited
+across `exec`, and `CommandExt::exec` is safe — it is only `pre_exec` that is
+not. So the helper needs no unsafe at all, and it slots into the existing
+`Sandbox` trait exactly as `sandbox-exec` does, because `wrap` already returns a
+rewritten argument vector.
+
+`bubblewrap` was the obvious alternative and loses on two counts: it is not
+installed everywhere, and it needs user namespaces that hardened kernels and
+some container runtimes restrict, which would make the boundary depend on the
+host's configuration. An unsafe exemption for one file was the third option and
+erodes a stated workspace invariant to save shipping a binary.
+
+**Kernel floor: Landlock ABI 4, kernel 6.7 or newer. Nothing older.**
+
+Landlock filesystem confinement arrived in 5.13; network confinement in 6.7.
+Supporting 5.13 means blocking `AF_INET` and `AF_INET6` socket creation with
+seccomp instead, which is a second mechanism, coarser, and easier to get subtly
+wrong around the unix sockets a build legitimately uses.
+
+**One mechanism that can be verified beats two that can each be half-verified**,
+and that is the whole argument. The cost is real and worth stating: this
+excludes long-term-support server kernels, notably anything on 5.15 or 5.10. On
+those, Gyrfalcon refuses to run processes and `--sandbox none` is the recorded
+escape, exactly as on any other platform without an implementation.
+
+**Testing: no Linux sandbox code lands until it is exercised on Linux, and the
+vehicle is CI rather than hardware.**
+
+This is the actual blocker and it comes first. Writing an unverifiable security
+boundary is the thing this repository keeps refusing to do, and Linux is not
+where it should start making exceptions. A GitHub Actions `ubuntu-latest` runner
+costs nothing, needs no hardware, and runs a recent kernel; whether it runs a
+kernel with Landlock in its LSM list is a fact rather than an assumption, so the
+first step is a job that reports it.
+
+"Done" for the Linux sandbox requires, on a real kernel, the two tests that
+carry the whole claim: a build script writing outside the workspace and being
+refused, and a network call returning nothing. Neither can be faked, and passing
+unit tests without them would be a green light for the wrong reason.
+
+### 5.2 The order of work
+
+1. CI on both platforms, running what already exists, plus a step that reports
+   the runner's kernel version and LSM list. This lands before any sandbox code
+   and answers whether the floor above is reachable in CI at all.
+2. `gyr-confine`, with the two escape tests gated to Linux.
+3. `Seatbelt` and the new implementation behind the same `detect`, with the
+   kernel-floor refusal message naming 6.7.
+
+If step 1 reports a runner without Landlock, the floor decision stands and the
+vehicle changes; the decision that must not change is that the code waits for
+the test.
 
 ## 6. Command surface
 
@@ -191,8 +250,9 @@ directly rather than through Gyrfalcon:
 
 - Whether a network-enabled mode is worth the `CARGO_HOME` write it requires,
   and whether a per-run registry overlay is a better answer than either.
-- Whether the Linux implementation should be an external launcher, a small
-  setuid-free helper binary, or a narrowly scoped `unsafe` exemption argued for
-  on its own terms.
+- ~~Whether the Linux implementation should be an external launcher, a small
+  setuid-free helper binary, or a narrowly scoped `unsafe` exemption.~~ Decided
+  in section 5.1: a helper binary, kernel 6.7 or newer, and not until CI can run
+  the escape tests.
 - Whether reads should be narrowed once there is an eval corpus to tell us what
   a Rust build actually touches, rather than what we assume it does.

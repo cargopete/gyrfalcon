@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # RFC-0009 section 5.2 step 1. This reports facts and asserts nothing, because
+  # the point is to find out whether the kernel floor chosen in section 5.1 is
+  # reachable on a hosted runner before any sandbox code is written for it.
+  landlock-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kernel version
+        run: uname -r
+      - name: Active LSMs
+        run: cat /sys/kernel/security/lsm || echo "securityfs not mounted"
+      - name: Landlock ABI, as the kernel reports it
+        run: |
+          cat > /tmp/probe.c <<'C'
+          #include <linux/landlock.h>
+          #include <stdio.h>
+          #include <sys/syscall.h>
+          #include <unistd.h>
+          int main(void) {
+              long abi = syscall(__NR_landlock_create_ruleset, NULL, 0,
+                                 LANDLOCK_CREATE_RULESET_VERSION);
+              if (abi < 0) {
+                  printf("landlock unavailable (errno-bearing return %ld)\n", abi);
+                  return 0;
+              }
+              printf("landlock ABI %ld; RFC-0009 needs 4 or higher\n", abi);
+              return 0;
+          }
+          C
+          cc /tmp/probe.c -o /tmp/probe && /tmp/probe
