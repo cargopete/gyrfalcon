@@ -51,6 +51,10 @@ pub struct RunSettings {
     pub max_turns: NonZeroU32,
     pub mode: ApprovalMode,
     pub show_reasoning: bool,
+    /// Overrides the endpoint for a self-served model.
+    pub api_base: Option<String>,
+    /// Asks a toggling model not to think. Absent leaves the server's default.
+    pub disable_thinking: bool,
 }
 
 /// Resolves the model profile named by a flag or `GYR_MODEL`.
@@ -92,11 +96,11 @@ pub fn resolve_workspace(flag: Option<&Path>) -> Result<PathBuf> {
 /// Builds a provider session, failing here rather than inside a stream when a
 /// credential is missing.
 pub fn build_session(
-    profile: &ModelProfile,
+    settings: &RunSettings,
     system_prompt: String,
     tools: Vec<ToolDefinition>,
 ) -> Result<Box<dyn ModelSession>> {
-    build_session_from(profile, system_prompt, tools, &|name| {
+    build_session_from(settings, system_prompt, tools, &|name| {
         std::env::var(name).ok()
     })
 }
@@ -104,11 +108,12 @@ pub fn build_session(
 /// The credential lookup is a parameter so it can be tested without writing to
 /// the process environment, which every other test would then have to share.
 fn build_session_from(
-    profile: &ModelProfile,
+    settings: &RunSettings,
     system_prompt: String,
     tools: Vec<ToolDefinition>,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Box<dyn ModelSession>> {
+    let profile = &settings.profile;
     match profile.provider {
         ProviderKind::Anthropic => {
             let key = require_env(env, "ANTHROPIC_API_KEY", profile)?;
@@ -129,13 +134,22 @@ fn build_session_from(
             Ok(Box::new(OpenAiSession::new(config)?))
         }
         ProviderKind::Qwen => {
-            let api_base = require_env(env, "QWEN_API_BASE", profile)?;
+            let api_base = match &settings.api_base {
+                Some(api_base) => api_base.clone(),
+                None => require_env(env, "QWEN_API_BASE", profile)?,
+            };
             let mut config = QwenConfig::new(api_base, profile.clone());
+            if settings.disable_thinking {
+                config.enable_thinking = Some(false);
+            }
             config.api_key = env("QWEN_API_KEY").filter(|key| !key.is_empty());
             config.system_prompt = system_prompt;
             config.tools = tools;
             config.max_output_tokens = profile.max_output_tokens;
-            config.sampling = profile.sampling;
+            // Deliberately not copying the profile's sampling here. The adapter
+            // already falls back to it, and an explicit copy overrides the
+            // adapter's own non-thinking sampling profile, which is a quieter
+            // way of ignoring --no-thinking than one would like.
             Ok(Box::new(QwenSession::new(config)?))
         }
     }
@@ -173,6 +187,19 @@ mod tests {
         None
     }
 
+    fn settings(profile: ModelProfile) -> RunSettings {
+        RunSettings {
+            profile,
+            workspace: PathBuf::from("."),
+            log_path: PathBuf::from("run.jsonl"),
+            max_turns: NonZeroU32::new(4).unwrap(),
+            mode: ApprovalMode::ReadOnly,
+            show_reasoning: false,
+            api_base: None,
+            disable_thinking: false,
+        }
+    }
+
     #[test]
     fn a_missing_credential_fails_before_any_request() {
         for (key, expected) in [
@@ -180,9 +207,9 @@ mod tests {
             ("terra", "OPENAI_API_KEY"),
             ("qwen3-coder-480b-a35b", "QWEN_API_BASE"),
         ] {
-            let profile = builtin_profile(key).expect("built-in profile");
+            let settings = settings(builtin_profile(key).expect("built-in profile"));
 
-            let Err(error) = build_session_from(&profile, String::new(), Vec::new(), &empty_env)
+            let Err(error) = build_session_from(&settings, String::new(), Vec::new(), &empty_env)
             else {
                 panic!("{key}: a session without a credential must not be built");
             };
@@ -192,6 +219,17 @@ mod tests {
                 "{key} should name {expected}, said: {error}"
             );
         }
+    }
+
+    #[test]
+    fn an_endpoint_flag_stands_in_for_the_environment() {
+        let mut settings = settings(builtin_profile("qwen3-8b").expect("built-in profile"));
+        settings.api_base = Some("http://thinkpad.local:11434/v1".into());
+
+        let session = build_session_from(&settings, String::new(), Vec::new(), &empty_env)
+            .expect("an explicit endpoint needs no environment variable");
+
+        assert_eq!(session.profile().provider_model, "qwen3:8b");
     }
 
     #[test]

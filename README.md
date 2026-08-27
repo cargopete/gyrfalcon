@@ -74,9 +74,24 @@ export ANTHROPIC_API_KEY=...
 gyr run --model claude-opus "what does gyr-core::Agent::run guarantee?"
 ```
 
-Mutations ask before they happen. `--read-only` refuses them instead, and
-`--dangerously-allow-all` does not ask, which is a decision worth making
-deliberately. Every run writes `.gyr/sessions/<id>.jsonl`.
+Mutations ask before they happen, and so does every `cargo` call, which is
+classified as a process and never auto-allowed. `--read-only` refuses both
+instead, and `--dangerously-allow-all` does not ask, which is a decision worth
+making deliberately. Every run writes `.gyr/sessions/<id>.jsonl`.
+
+A small local model is included as a development target so the loop can be
+driven by real inference without a hosted credential. It is not a coding target
+and `gyr models` labels it accordingly:
+
+```console
+gyr run --model qwen3-8b --api-base http://thinkpad.local:11434/v1 \
+        --no-thinking --read-only "what is in src/lib.rs?"
+```
+
+Ollama serves a context far smaller than the model's native window unless
+`num_ctx` is raised, which truncates the system prompt and tool schemas without
+saying so. See RFC-0003 section 3.1 for what has and has not been measured
+there.
 
 The command is `gyr`; Gyrfalcon is the project.
 

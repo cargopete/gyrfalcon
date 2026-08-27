@@ -186,7 +186,13 @@ impl QwenSession {
                 .collect::<Vec<_>>();
             body.insert("tools".into(), Value::Array(tools));
             body.insert("tool_choice".into(), json!("auto"));
-            body.insert("parallel_tool_calls".into(), json!(true));
+            // An adapter may expose less than a model can do and never more,
+            // per RFC-0001 section 5. Asking a profile that says no for
+            // parallel calls would be asking for more.
+            body.insert(
+                "parallel_tool_calls".into(),
+                json!(self.config.profile.parallel_tool_calls),
+            );
         }
 
         if matches!(self.config.profile.reasoning, ReasoningSupport::Toggle) {
@@ -680,6 +686,29 @@ mod tests {
             body["chat_template_kwargs"],
             json!({"enable_thinking": true, "preserve_thinking": true})
         );
+    }
+
+    #[test]
+    fn parallel_tool_calls_follows_the_profile_rather_than_the_adapter() {
+        let profile = crate::builtin_profile("qwen3-8b").unwrap();
+        assert!(
+            !profile.parallel_tool_calls,
+            "fixture assumes a serial model"
+        );
+        let mut config = QwenConfig::new("http://127.0.0.1:8000/v1", profile);
+        config.tools = vec![ToolDefinition {
+            name: "read".into(),
+            description: "read a file".into(),
+            input_schema: json!({"type": "object"}),
+        }];
+        let session = QwenSession::new(config).unwrap();
+        let pending = QwenSession::pending_messages(TurnInput::User {
+            content: "hello".into(),
+        });
+
+        let body = session.request_body(&pending).unwrap();
+
+        assert_eq!(body["parallel_tool_calls"], false);
     }
 
     #[test]

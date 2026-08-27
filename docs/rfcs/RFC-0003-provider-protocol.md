@@ -71,6 +71,34 @@ session still carries the provider model identifier explicitly so deployments
 can pin a snapshot or test another compatible model without changing the
 transport.
 
+### 3.1 Development targets
+
+**Amended 2026-08-27.** Section 7 ends by saying a profile is not marked
+supported until a real model run has completed the behavioural evals. That is
+now a field rather than a sentence: every `ModelProfile` carries a
+`ProfileStatus` of `supported` or `development`, and `supported_profiles()`
+returns only the former. The catalogue test above pins the supported set, so a
+development entry cannot quietly join it.
+
+| Model | Protocol | Reasoning | Native context | Status |
+|---|---|---:|---:|---|
+| `qwen3:8b` | Qwen Chat Completions | toggle | 32,768 | development |
+
+`qwen3:8b` exists so the loop, the tool round trip and the approval path can be
+driven by real inference on a laptop. It is not a coding target, it has not been
+through the conformance suite, and `gyr models` says "development only" beside
+it.
+
+**Not measured.** The identifier is Ollama's tag format, and Ollama is not a
+supported serving stack: RFC-0001 admits local runtimes only once they pass the
+same conformance suite. Two consequences are worth writing down before somebody
+rediscovers them at a keyboard. Ollama serves a default context far below the
+model's native window unless `num_ctx` is raised, which silently truncates the
+system prompt and tool schemas rather than failing. And Ollama's
+OpenAI-compatible surface is not known to honour `chat_template_kwargs`, so
+`--no-thinking` may be sent and ignored. The request Gyrfalcon sends has been
+verified locally; what Ollama does with it has not.
+
 ## 4. OpenAI Responses
 
 **Provider-documented on 2026-08-23:** `gpt-5.6-terra` supports the Responses

@@ -6,6 +6,7 @@ use std::pin::Pin;
 use futures_core::Stream;
 use gyr_protocol::ModelEvent;
 use gyr_protocol::ModelProfile;
+use gyr_protocol::ProfileStatus;
 use gyr_protocol::ProviderKind;
 use gyr_protocol::ReasoningEffort;
 use gyr_protocol::ReasoningSupport;
@@ -55,6 +56,15 @@ pub enum ModelError {
     Configuration(String),
 }
 
+/// The MVP coding targets, without development-only entries.
+#[must_use]
+pub fn supported_profiles() -> Vec<ModelProfile> {
+    builtin_profiles()
+        .into_iter()
+        .filter(|profile| profile.status == ProfileStatus::Supported)
+        .collect()
+}
+
 #[must_use]
 pub fn builtin_profiles() -> Vec<ModelProfile> {
     vec![
@@ -65,6 +75,7 @@ pub fn builtin_profiles() -> Vec<ModelProfile> {
         qwen_coder_30b(),
         qwen_3_6_27b(),
         qwen_3_6_35b_a3b(),
+        qwen3_8b(),
     ]
 }
 
@@ -81,6 +92,7 @@ fn terra() -> ModelProfile {
         provider_model: "gpt-5.6-terra".into(),
         display_name: "GPT-5.6 Terra".into(),
         provider: ProviderKind::OpenAi,
+        status: ProfileStatus::Supported,
         context_window_tokens: Some(1_050_000),
         max_output_tokens: Some(128_000),
         reasoning: ReasoningSupport::Effort(vec![
@@ -105,6 +117,7 @@ fn claude_opus() -> ModelProfile {
         provider_model: "claude-opus-5".into(),
         display_name: "Claude Opus".into(),
         provider: ProviderKind::Anthropic,
+        status: ProfileStatus::Supported,
         context_window_tokens: Some(1_000_000),
         max_output_tokens: Some(128_000),
         reasoning: ReasoningSupport::Effort(vec![
@@ -181,6 +194,7 @@ fn qwen_coder(
         provider_model: provider_model.into(),
         display_name: display_name.into(),
         provider: ProviderKind::Qwen,
+        status: ProfileStatus::Supported,
         context_window_tokens: Some(262_144),
         max_output_tokens: None,
         reasoning: ReasoningSupport::None,
@@ -200,12 +214,51 @@ fn qwen_3_6_35b_a3b() -> ModelProfile {
     qwen_3_6("qwen3.6-35b-a3b", "Qwen/Qwen3.6-35B-A3B", "Qwen3.6 35B-A3B")
 }
 
+/// A small local model, present as a development target rather than a coding
+/// target.
+///
+/// It exists so the loop, the tool round trip and the approval path can be
+/// exercised against real inference on a laptop. It is not claimed to be a
+/// useful Rust coding agent, and it has not been through a conformance suite.
+///
+/// **Not measured.** The provider model string is Ollama's tag format. The
+/// listed context window is the model's native one; Ollama serves a far smaller
+/// default unless `num_ctx` is raised, which will silently truncate the system
+/// prompt and tool schemas before the model ever sees them.
+fn qwen3_8b() -> ModelProfile {
+    ModelProfile {
+        key: "qwen3-8b".into(),
+        provider_model: "qwen3:8b".into(),
+        display_name: "Qwen3 8B (local development)".into(),
+        provider: ProviderKind::Qwen,
+        status: ProfileStatus::Development,
+        context_window_tokens: Some(32_768),
+        max_output_tokens: None,
+        reasoning: ReasoningSupport::Toggle,
+        parallel_tool_calls: false,
+        image_input: false,
+        // vLLM's documented parser for Qwen3, recorded for the day this is
+        // served by something other than Ollama, which uses its own template.
+        tool_call_parser: Some("hermes".into()),
+        reasoning_parser: Some("qwen3".into()),
+        sampling: Some(SamplingDefaults {
+            temperature: 0.6,
+            top_p: 0.95,
+            top_k: Some(20),
+            min_p: Some(0.0),
+            presence_penalty: Some(0.0),
+            repetition_penalty: Some(1.0),
+        }),
+    }
+}
+
 fn qwen_3_6(key: &str, provider_model: &str, display_name: &str) -> ModelProfile {
     ModelProfile {
         key: key.into(),
         provider_model: provider_model.into(),
         display_name: display_name.into(),
         provider: ProviderKind::Qwen,
+        status: ProfileStatus::Supported,
         context_window_tokens: Some(262_144),
         max_output_tokens: None,
         reasoning: ReasoningSupport::Toggle,
@@ -234,7 +287,7 @@ mod tests {
 
     #[test]
     fn catalogue_contains_exactly_the_mvp_models() {
-        let profiles = builtin_profiles();
+        let profiles = supported_profiles();
         let models = profiles
             .iter()
             .map(|profile| profile.provider_model.as_str())
@@ -253,16 +306,29 @@ mod tests {
             ]
         );
 
-        let unique_keys = profiles
+        let all = builtin_profiles();
+        let unique_keys = all
             .iter()
             .map(|profile| profile.key.as_str())
             .collect::<HashSet<_>>();
-        assert_eq!(unique_keys.len(), profiles.len());
+        assert_eq!(unique_keys.len(), all.len());
+    }
+
+    #[test]
+    fn the_only_development_target_is_the_small_local_model() {
+        let development: Vec<String> = builtin_profiles()
+            .into_iter()
+            .filter(|profile| profile.status == ProfileStatus::Development)
+            .map(|profile| profile.key)
+            .collect();
+
+        assert_eq!(development, vec!["qwen3-8b".to_owned()]);
+        assert_eq!(builtin_profiles().len(), supported_profiles().len() + 1);
     }
 
     #[test]
     fn qwen_profiles_declare_parser_and_reasoning_differences() {
-        let profiles = builtin_profiles();
+        let profiles = supported_profiles();
         let qwen = profiles
             .iter()
             .filter(|profile| profile.provider == ProviderKind::Qwen)

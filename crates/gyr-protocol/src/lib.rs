@@ -47,6 +47,21 @@ pub struct SamplingDefaults {
     pub repetition_penalty: Option<f64>,
 }
 
+/// Why a model is in the catalogue.
+///
+/// The catalogue is deliberately bounded, so anything present for another
+/// reason has to say so rather than sitting alongside the supported targets and
+/// being mistaken for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileStatus {
+    /// An MVP coding target.
+    Supported,
+    /// Present to exercise the loop against real inference. Not a coding target
+    /// and not through any conformance suite.
+    Development,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelProfile {
     /// Stable Gyrfalcon configuration key.
@@ -55,6 +70,7 @@ pub struct ModelProfile {
     pub provider_model: String,
     pub display_name: String,
     pub provider: ProviderKind,
+    pub status: ProfileStatus,
     pub context_window_tokens: Option<u32>,
     pub max_output_tokens: Option<u32>,
     pub reasoning: ReasoningSupport,

@@ -31,6 +31,7 @@ use gyr_core::session::JsonlSessionLog;
 use gyr_core::session::SessionId;
 use gyr_core::session::SessionMeta;
 use gyr_model::builtin_profiles;
+use gyr_protocol::ProfileStatus;
 use gyr_protocol::StopReason;
 use gyr_protocol::ToolDefinition;
 use gyr_rust::CargoLimits;
@@ -107,6 +108,13 @@ struct RunArgs {
     /// Never emit terminal colour.
     #[arg(long)]
     plain: bool,
+    /// Endpoint for a self-served model, standing in for `QWEN_API_BASE`.
+    #[arg(long)]
+    api_base: Option<String>,
+    /// Ask a toggling model not to think. Leaves the server's default alone
+    /// when absent.
+    #[arg(long)]
+    no_thinking: bool,
 }
 
 fn main() -> ExitCode {
@@ -145,8 +153,12 @@ fn list_models(json: bool) -> Result<()> {
         return Ok(());
     }
     for profile in builtin_profiles() {
+        let note = match profile.status {
+            ProfileStatus::Supported => "",
+            ProfileStatus::Development => "  (development only)",
+        };
         println!(
-            "{:<24} {:<12} {}",
+            "{:<24} {:<12} {}{note}",
             profile.key,
             format!("{:?}", profile.provider).to_lowercase(),
             profile.provider_model
@@ -213,7 +225,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     let tools = tool_set(&settings.workspace)?;
     let definitions = tools.definitions();
     let context = prompt_context(&settings.workspace, settings.mode, &definitions);
-    let session = config::build_session(&settings.profile, system_prompt(&context), definitions)?;
+    let session = config::build_session(&settings, system_prompt(&context), definitions)?;
 
     let log = JsonlSessionLog::create(
         &settings.log_path,
@@ -287,6 +299,8 @@ fn settings(args: &RunArgs, session_id: &SessionId) -> Result<RunSettings> {
         max_turns: args.max_turns,
         mode,
         show_reasoning: args.show_reasoning,
+        api_base: args.api_base.clone(),
+        disable_thinking: args.no_thinking,
     })
 }
 
