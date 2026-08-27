@@ -502,9 +502,7 @@ fn resolve(args: &CommonArgs, workspace: &Path) -> Result<Resolved> {
         if flag {
             (true, Source::Flag)
         } else {
-            layers
-                .pick(choose)
-                .map_or((false, Source::Default), |(value, source)| (value, source))
+            layers.pick(choose).unwrap_or((false, Source::Default))
         }
     };
 

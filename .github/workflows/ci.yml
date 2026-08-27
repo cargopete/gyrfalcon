@@ -17,7 +17,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned rather than floating on stable: an unpinned toolchain means CI
+      # can fail on a lint that did not exist when the code was written, which
+      # is a build that broke without anyone touching it.
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
