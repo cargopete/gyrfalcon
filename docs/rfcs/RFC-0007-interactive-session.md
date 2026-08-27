@@ -165,10 +165,35 @@ endpoint with four lines piped at it:
 - Truecolor sequences emitted for the exact palette, terracotta on the kickers
   and slate on the machine's lines.
 
+### 7.1 Multi-line input, answered 2026-08-27
+
+The open question below asked what a pasted stack trace does today. The answer
+was measured before anything was built, and it turned out to be "the right
+thing".
+
+**Pasting already worked.** rustyline enables bracketed paste by default and
+collects a whole pasted block, normalising `\r\n` to `\n`, into one buffer.
+Verified through a real pseudo-terminal rather than by reading: a three-line
+panic pasted into a session reached the provider as **one** request whose user
+message held three lines. Not three requests.
+
+That is worth recording because the alternative was building a fix for a problem
+that did not exist, and it was one afternoon away from happening.
+
+**Typing several lines did not work**, and now does: a line ending in a
+backslash continues, which is the convention fingers already have. The check is
+for an *odd* number of trailing backslashes, so a Windows path ending in an
+escaped one is not a continuation that silently swallows the next line.
+
+Verified the same way: three typed lines, two continuations, one request holding
+three lines with the backslashes gone.
+
 ## 8. Open questions
 
-- Whether a submission spanning several lines wants an explicit terminator or
-  bracketed paste, and what a pasted stack trace should do today.
+- ~~Whether a submission spanning several lines wants an explicit terminator or
+  bracketed paste, and what a pasted stack trace should do today.~~ Answered in
+  section 7.1: paste already did the right thing, and typed lines continue on a
+  trailing backslash.
 - Whether `/status` should show a context-window estimate, which needs a
   tokeniser Gyrfalcon does not currently have and should not guess at.
 - Whether the session should offer to resume the previous session's transcript,

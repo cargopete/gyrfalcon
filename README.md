@@ -233,9 +233,11 @@ Or put the model in `~/.config/gyr/config.toml` and just run `gyr`. See
 `gyr config` for what is set and where it came from.
 
 That opens a session. Inside it, `/help`, `/status`, `/log` and `/exit`; Ctrl-C
-cancels the current turn and keeps the conversation; Ctrl-D leaves. History
-persists to `.gyr/history`, and the conversation itself to `.gyr/sessions`, so
-`gyr --resume` picks it up where you left it.
+cancels the current turn and keeps the conversation; Ctrl-D leaves. Paste a
+stack trace and it arrives as one message; type a backslash at the end of a line
+to carry on to the next. History persists to `.gyr/history`, and the
+conversation itself to `.gyr/sessions`, so `gyr --resume` picks it up where you
+left it.
 
 For a script, CI or an eval, one submission and an exit code:
 

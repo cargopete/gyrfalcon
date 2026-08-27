@@ -15,7 +15,6 @@ use gyr_core::ToolSet;
 use gyr_model::ModelSession;
 use gyr_protocol::StopReason;
 use gyr_protocol::TokenUsage;
-use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +24,48 @@ use crate::style;
 use crate::style::FAINT;
 use crate::style::MUTED;
 use crate::style::SLATE;
+
+/// Lets a line ending in a backslash continue onto the next.
+///
+/// Pasting already works: rustyline enables bracketed paste by default and
+/// delivers a whole multi-line block as one buffer, which was measured rather
+/// than assumed. What did not work was *composing* several lines, which is what
+/// this is for, and the shell's convention is the one fingers already know.
+#[derive(Default)]
+struct Continuation;
+
+impl rustyline::validate::Validator for Continuation {
+    fn validate(
+        &self,
+        context: &mut rustyline::validate::ValidationContext<'_>,
+    ) -> rustyline::Result<rustyline::validate::ValidationResult> {
+        Ok(if ends_open(context.input()) {
+            rustyline::validate::ValidationResult::Incomplete
+        } else {
+            rustyline::validate::ValidationResult::Valid(None)
+        })
+    }
+}
+
+/// True when the input ends in an odd number of backslashes, so the last one is
+/// a continuation rather than an escaped backslash a person meant to keep.
+fn ends_open(input: &str) -> bool {
+    input.chars().rev().take_while(|c| *c == '\\').count() % 2 == 1
+}
+
+/// Removes the continuations a person typed, joining the lines they held apart.
+fn join_continuations(input: &str) -> String {
+    input.replace("\\\n", "\n")
+}
+
+impl rustyline::completion::Completer for Continuation {
+    type Candidate = String;
+}
+impl rustyline::hint::Hinter for Continuation {
+    type Hint = String;
+}
+impl rustyline::highlight::Highlighter for Continuation {}
+impl rustyline::Helper for Continuation {}
 
 /// What a person typed at the prompt.
 #[derive(Debug, PartialEq, Eq)]
@@ -99,7 +140,9 @@ where
     /// submission is reported and the session continues, because one bad turn
     /// is not a reason to throw away the conversation.
     pub async fn run(&mut self) -> Result<()> {
-        let mut editor = DefaultEditor::new().context("cannot start the line editor")?;
+        let mut editor: rustyline::Editor<Continuation, rustyline::history::FileHistory> =
+            rustyline::Editor::new().context("cannot start the line editor")?;
+        editor.set_helper(Some(Continuation));
         let _ = editor.load_history(&self.history_path);
 
         println!("{}", self.banner());
@@ -116,7 +159,7 @@ where
             match editor.readline(&prompt) {
                 Ok(line) => {
                     let _ = editor.add_history_entry(line.as_str());
-                    if self.handle(parse(&line)).await? {
+                    if self.handle(parse(&join_continuations(&line))).await? {
                         break;
                     }
                 }
@@ -234,6 +277,29 @@ fn help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trailing_backslash_keeps_the_line_open() {
+        assert!(ends_open("first line \\"));
+        assert!(ends_open("path\\\\ then \\"));
+        // An even number is an escaped backslash a person meant to keep, not a
+        // continuation. Getting this wrong swallows the next line.
+        assert!(!ends_open("a windows path C:\\\\"));
+        assert!(!ends_open("no backslash at all"));
+    }
+
+    #[test]
+    fn continuations_are_removed_and_the_lines_joined() {
+        assert_eq!(
+            join_continuations("first\\\nsecond\\\nthird"),
+            "first\nsecond\nthird"
+        );
+        // A pasted block has no continuations and must survive untouched.
+        assert_eq!(
+            join_continuations("thread panicked\nstack backtrace:"),
+            "thread panicked\nstack backtrace:"
+        );
+    }
 
     #[test]
     fn a_leading_slash_with_a_letter_is_a_command() {
