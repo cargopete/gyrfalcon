@@ -17,6 +17,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
+gyr-protocol.workspace = true
 pretty_assertions.workspace = true
 tokio.workspace = true
 

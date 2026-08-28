@@ -26,8 +26,11 @@ CI and evals.
 - **Three native transports.** OpenAI Responses, Anthropic Messages and Qwen
   Chat Completions, each keeping its own conversation state so continuation does
   not lose reasoning items or content ordering. Recorded parser tests
-  throughout; Qwen and Anthropic also have local HTTP/SSE wire tests. Only
-  Anthropic has been driven against a live endpoint.
+  throughout, and a cross-provider conformance suite drives all three over a
+  real socket and asserts the same normalised events from each: three wires, one
+  semantics. Only Anthropic has been driven against a live endpoint, so what the
+  suite proves is that the adapters agree, not that a provider accepts what they
+  send.
 - **Six tools.** `read` returns bounded, numbered, fingerprinted ranges.
   `search` is literal and ignore-aware with explicit totals. `list` shows what is
   in the workspace through the same ignore rules, with `all` to see what those

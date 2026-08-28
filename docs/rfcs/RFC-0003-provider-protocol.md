@@ -268,6 +268,48 @@ Passing the HTTP schema is necessary and insufficient. A real model run must
 also complete the common behavioural evals before a model profile is marked
 supported.
 
+### 7.1 The suite, built 2026-08-27
+
+`gyr-model/tests/conformance.rs` drives all three adapters over a real socket
+with provider-shaped SSE and asserts the same **normalised** events from each.
+Three wires, one semantics, which is the whole claim the `ModelSession` boundary
+makes and which nothing checked until now. Each adapter had tested whatever its
+author thought of, and **`OpenAiSession` had no wire test at all** — the
+transport with the least coverage being the one with no credential to verify it.
+
+Six of the twelve scenarios are covered here, and the honest accounting of the
+rest matters more than the count:
+
+| # | Scenario | Where |
+|---|---|---|
+| 1 | Plain streamed answer | conformance suite |
+| 2 | Tool call then answer | partly here; the round trip is a core test |
+| 3 | Several tool calls in one turn | conformance suite |
+| 4 | Tool error returned to the same call ID | `gyr-core` agent tests |
+| 5 | Text and tool calls interleaved | conformance suite |
+| 6 | Malformed or truncated arguments | conformance suite |
+| 7 | Duplicate call ID | `gyr-core` agent tests |
+| 8 | Stream ends without a terminal event | conformance suite |
+| 9 | Cancellation mid-stream | `gyr-core` agent tests |
+| 10 | Continuation after handle loss | RFC-0014 round trips |
+| 11 | Usage and cache accounting | conformance suite |
+| 12 | A long Rust task with compiler feedback | the eval corpus |
+
+Scenarios 4, 7 and 9 are properties of the loop rather than of a transport and
+are tested where they live. Scenario 12 is an eval and cannot be a unit test.
+
+**A convention worth writing down, discovered by getting a fixture wrong.**
+Anthropic's `input_tokens` **excludes** cached tokens, so its adapter sums
+`input + cache_creation + cache_read`. OpenAI's and Qwen's **include** them, so
+theirs pass the value through. Fifteen-plus-five on one wire is
+twenty-including-five on the others, and all three normalise to twenty. The
+first draft of the fixture used twenty on all three, and the suite reported
+Anthropic as twenty-five. Both adapters were right; the fixture was not.
+
+That is the kind of thing a cross-provider suite exists to surface, and it would
+have surfaced as a real accounting error the first time anyone compared token
+counts between providers.
+
 ## 8. Raw capture and privacy
 
 Conformance fixtures need raw provider events, but real sessions may contain
