@@ -172,8 +172,18 @@ beside it.
 ## Using it
 
 ```console
-cargo run -p gyr-cli -- models
-cargo run -p gyr-cli -- prompt --model claude-sonnet
+cargo install --path crates/gyr-cli --locked
+```
+
+That installs two binaries: `gyr`, and `gyr-confine`, which is the Linux sandbox
+helper. They must sit together, because `gyr` looks for the helper beside itself;
+`cargo install` puts both in the same directory, and `GYR_CONFINE` overrides for
+a packager who does otherwise. Without the helper, Linux refuses to run any
+process rather than running it unconfined.
+
+```console
+gyr models
+gyr prompt --model claude-sonnet
 ```
 
 Running against a model needs that provider's credential in the environment:
@@ -264,11 +274,13 @@ cargo fmt --all --check
 gyr eval --model claude-sonnet   # needs a credential; not part of cargo test
 ```
 
-CI runs the first three on macOS and Linux against a pinned toolchain. It found a
-cross-platform defect on its first Linux build, before it had been asked to do
-the thing it was added for.
+CI runs the first three on macOS and Linux against a pinned toolchain, and
+separately installs the binaries and has the helper refuse a write outside a
+workspace. It has now caught two defects invisible to the ordinary test run: a
+macOS-only helper left undead on Linux, and a sandbox helper that `cargo install`
+did not deliver at all.
 
-Ten crates:
+Nine crates:
 
 - `gyr-protocol` — values crossing crate and frontend boundaries.
 - `gyr-model` — provider session traits and the explicit model catalogue.
@@ -276,13 +288,13 @@ Ten crates:
   fence, the context budget and the system prompt.
 - `gyr-tools` — workspace filesystem tools and their hard output limits.
 - `gyr-sandbox` — operating-system containment. Rewrites a command; never spawns.
-- `gyr-confine` — the Linux helper: restricts itself with Landlock, then `exec`s.
 - `gyr-exec` — the process runner and the `exec` tool.
 - `gyr-rust` — the `cargo` tool, diagnostic parsing, and the withdrawn gate.
 - `gyr-eval` — the case format, the runner, the metrics read from a log, and the
   one definition of what tools a session gets.
 - `gyr-cli` — the `gyr` executable, its session loop, renderer, palette and
-  approval prompt.
+  approval prompt, and the `gyr-confine` helper that restricts itself with
+  Landlock and then `exec`s.
 
 Tests that invoke a real `cargo` build a dependency-free fixture in a temporary
 directory, so they need a toolchain but no network. The six confinement tests run

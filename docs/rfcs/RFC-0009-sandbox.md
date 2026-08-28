@@ -234,6 +234,15 @@ carry the weight:
   `CommandExt::exec` are both safe. That was the argument for a helper in
   section 5.1 and it survived contact with the code.
 
+**Amended 2026-08-27.** The helper ships as a second binary target of
+`gyr-cli` rather than from its own crate. It had its own crate first, and
+`cargo install --path crates/gyr-cli` delivered `gyr` alone: an installed agent
+on Linux would have found no helper and refused every process. The argument in
+this section was for a helper *process* over in-process `unsafe`, and which
+crate builds it is packaging rather than design. CI now installs and runs a
+confined write, because that defect was invisible to every test that ran from
+`target/`.
+
 `Landlock` in `gyr-sandbox` locates the helper beside the running executable,
 then one directory up because a test binary lives in `deps/`, then on `PATH`,
 with `GYR_CONFINE` overriding for packaging. A helper that cannot be found is

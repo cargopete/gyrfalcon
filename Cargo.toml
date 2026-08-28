@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/gyr-cli",
-    "crates/gyr-confine",
     "crates/gyr-core",
     "crates/gyr-eval",
     "crates/gyr-exec",

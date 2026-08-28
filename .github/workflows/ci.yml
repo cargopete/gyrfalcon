@@ -31,6 +31,38 @@ jobs:
       - run: cargo build --workspace
       - run: cargo test --workspace
 
+  # Installing is how anyone but this repository gets a `gyr`, and the sandbox
+  # helper has to arrive with it. It did not, once: `gyr-confine` lived in its
+  # own crate and `cargo install` delivered only `gyr`, leaving an installed
+  # agent on Linux unable to run any process at all. This job is that regression.
+  installed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --path crates/gyr-cli --root "$RUNNER_TEMP/install" --locked
+      - name: Both binaries installed
+        run: |
+          ls -1 "$RUNNER_TEMP/install/bin"
+          test -x "$RUNNER_TEMP/install/bin/gyr"
+          test -x "$RUNNER_TEMP/install/bin/gyr-confine"
+      - name: The installed helper confines a write, run from elsewhere
+        run: |
+          mkdir -p "$RUNNER_TEMP/ws"
+          cd /
+          "$RUNNER_TEMP/install/bin/gyr-confine" \
+            --allow-write "$RUNNER_TEMP/ws" \
+            -- /bin/sh -c 'echo escaped > /tmp/gyr-ci-escape' && exit 1
+          test ! -f /tmp/gyr-ci-escape
+          echo "the write was refused, as it should have been"
+      - name: And allows one inside the workspace
+        run: |
+          "$RUNNER_TEMP/install/bin/gyr-confine" \
+            --allow-write "$RUNNER_TEMP/ws" \
+            -- /bin/sh -c "echo fine > $RUNNER_TEMP/ws/written"
+          test -f "$RUNNER_TEMP/ws/written"
+
   # RFC-0009 section 5.2 step 1. This reports facts and asserts nothing, because
   # the point is to find out whether the kernel floor chosen in section 5.1 is
   # reachable on a hosted runner before any sandbox code is written for it.
