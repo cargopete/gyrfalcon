@@ -405,10 +405,57 @@ a measured 6.6% run-to-run variance. Confounded, because the leaner arm also
 made fewer calls, but suggestive that a tool surface has a price and that adding
 one is not free.
 
+### 9.12 The first time the corpus compared two models
+
+Nine cases against `claude-sonnet-5` and `claude-opus-5`, same build, same day.
+Until now the harness had been used entirely to debug Gyrfalcon and never once
+for the thing it is named after.
+
+| | Sonnet | Opus |
+|---|---:|---:|
+| passed | 9/9 | 9/9 |
+| model turns | 56 | 57 |
+| input tokens | 242,282 | 324,589 |
+| output tokens | 10,039 | 16,721 |
+| cost at list price | $0.58 | $2.04 |
+
+**The assertions do not discriminate.** Both models pass every case. Section 8
+said a judge model becomes worth designing "when the checkable assertions have
+stopped discriminating between models"; on this corpus, for these two models,
+they have. That is a statement about the corpus being too easy, not about the
+models being equal.
+
+**The metrics discriminate sharply.** On `wide-cascade`, the case built so that
+reading everything is expensive, **Opus read all thirty-one files and Sonnet read
+five** — the four that broke plus the type's own module. Same correct result,
+111,301 input tokens against 42,393. Opus also reached for `list` in eight cases
+of nine where Sonnet used it in two, and for `exec` three times where Sonnet used
+it none.
+
+So the two models solve this corpus differently and the difference is invisible
+to every assertion in it. **That vindicates section 2's split more sharply than
+anything before it:** had turn counts or token counts been assertions, both
+models would still have passed and the difference would have been thrown away.
+Assertions decided nothing here; metrics carried the entire finding.
+
+**What this does not say.** One run each. Cost is list price, not measured
+billing. And "Sonnet is better for this" would be a claim about nine small Rust
+fixtures, which is not a claim about anything else.
+
+**A miss worth recording.** The run was estimated at about seventy pence for
+Opus and cost $2.04. The estimate assumed comparable token counts and applied
+the price ratio; Opus used 34% more input at 2.5x the price, and reading
+thirty-one files rather than five is where that went. Estimating a model's cost
+from another model's token counts is the error, and the harness now prints
+totals precisely so that it is checkable afterwards.
+
 ## 10. Open questions
 
 - Whether a case should be able to assert on the gate's final verdict, which is
   tempting and is prescribing method by the back door.
+- What a corpus looks like that discriminates between Opus and Sonnet on
+  assertions rather than only on metrics. Section 9.12 says the current one does
+  not, and harder cases are the cheaper answer to try before a judge model.
 - ~~What `--without search` and `--without list` do to the corpus.~~ Answered in
   section 9.9. The follow-on question is whether either earns its place on a
   workspace large enough that reading everything is not an option, which this

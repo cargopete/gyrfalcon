@@ -144,6 +144,13 @@ shorter. The code and RFC-0011 stay; it is not in the tool set.
 **A tool surface has a price.** A leaner one cost 26% fewer input tokens for
 identical outcomes, well outside the measured 6.6% run-to-run noise floor.
 
+**Two models solve it identically on paper and differently in fact.** Sonnet and
+Opus both pass nine of nine. On the case built so that reading everything is
+expensive, Opus read all thirty-one files and Sonnet read five, for the same
+correct result and 2.6 times the tokens; across the corpus Opus cost $2.04 to
+Sonnet's $0.58. Every assertion missed that difference and the metrics carried
+it, which is the clearest argument yet for keeping the two apart.
+
 Two rules the corpus applies to itself. A case where nothing changed fails even
 if the code compiled, unless its deliverable is an answer rather than an edit.
 And cases run unattended, therefore inside the sandbox, because unattended and
