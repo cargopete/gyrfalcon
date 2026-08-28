@@ -277,13 +277,13 @@ makes and which nothing checked until now. Each adapter had tested whatever its
 author thought of, and **`OpenAiSession` had no wire test at all** — the
 transport with the least coverage being the one with no credential to verify it.
 
-Six of the twelve scenarios are covered here, and the honest accounting of the
+Seven of the twelve scenarios are covered here, and the honest accounting of the
 rest matters more than the count:
 
 | # | Scenario | Where |
 |---|---|---|
 | 1 | Plain streamed answer | conformance suite |
-| 2 | Tool call then answer | partly here; the round trip is a core test |
+| 2 | Tool call then answer, result returned | conformance suite |
 | 3 | Several tool calls in one turn | conformance suite |
 | 4 | Tool error returned to the same call ID | `gyr-core` agent tests |
 | 5 | Text and tool calls interleaved | conformance suite |
@@ -297,6 +297,13 @@ rest matters more than the count:
 
 Scenarios 4, 7 and 9 are properties of the loop rather than of a transport and
 are tested where they live. Scenario 12 is an eval and cannot be a unit test.
+
+Scenario 2 is the two-turn one, and the only one that inspects what the adapter
+**sends** rather than what it parses. The three wires carry a tool result three
+different ways: a `tool_result` content block, a `function_call_output` item, and
+a message with `role: "tool"`. What must be true of all three is that the next
+request carries the output tied to the ID the provider issued, and that is what
+is asserted, one property across three shapes.
 
 **A convention worth writing down, discovered by getting a fixture wrong.**
 Anthropic's `input_tokens` **excludes** cached tokens, so its adapter sums

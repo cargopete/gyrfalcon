@@ -50,6 +50,86 @@ impl Provider {
     }
 }
 
+/// Serves one SSE script per connection and hands back what was asked for.
+///
+/// A second turn needs the request body the adapter sent, because the property
+/// scenario 2 is really about is not what came back but what went out next.
+async fn serve_turns(
+    scripts: Vec<Vec<String>>,
+) -> (String, tokio::sync::oneshot::Receiver<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let mut bodies = Vec::new();
+        for script in scripts {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            bodies.push(read_request(&mut socket).await);
+            let mut response = String::from(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+            );
+            for chunk in script {
+                let _ = writeln!(&mut response, "data: {chunk}\n");
+            }
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+        let _ = sender.send(bodies);
+    });
+    (format!("http://{address}"), receiver)
+}
+
+/// Reads one HTTP request and returns its body.
+async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4_096];
+    loop {
+        let read = socket.read(&mut buffer).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        let text = String::from_utf8_lossy(&request);
+        if let Some(headers_end) = text.find("\r\n\r\n") {
+            let length: usize = text
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse().ok())?
+                })
+                .unwrap_or(0);
+            if request.len() >= headers_end + 4 + length {
+                return String::from_utf8_lossy(&request[headers_end + 4..]).into_owned();
+            }
+        }
+    }
+    String::new()
+}
+
+fn build(provider: Provider, base: String) -> Box<dyn ModelSession> {
+    match provider {
+        Provider::Anthropic => {
+            let mut config =
+                AnthropicConfig::new("key", gyr_model::builtin_profile("claude-opus").unwrap());
+            config.api_base = base;
+            Box::new(AnthropicSession::new(config).unwrap())
+        }
+        Provider::OpenAi => {
+            let mut config = OpenAiConfig::new("key", gyr_model::builtin_profile("terra").unwrap());
+            config.api_base = base;
+            Box::new(OpenAiSession::new(config).unwrap())
+        }
+        Provider::Qwen => Box::new(
+            QwenSession::new(QwenConfig::new(
+                format!("{base}/v1"),
+                gyr_model::builtin_profile("qwen3-coder-next").unwrap(),
+            ))
+            .unwrap(),
+        ),
+    }
+}
+
 /// Serves one SSE script on the loopback interface and hangs up.
 ///
 /// Shared, because two adapters had grown their own copy of this and the third
@@ -401,5 +481,66 @@ async fn every_adapter_refuses_a_stream_with_no_terminal_event() {
             "{}: {error}",
             provider.name()
         );
+    }
+}
+
+#[tokio::test]
+async fn every_adapter_returns_a_tool_result_under_its_own_call_id() {
+    // Scenario 2, the half a single-turn test cannot reach. The three wires
+    // carry a result three different ways: a `tool_result` content block, a
+    // `function_call_output` item, and a message with `role: "tool"`. What must
+    // be true of all three is that the next request carries the output, tied to
+    // the ID the provider issued.
+    let answer = plain_answer();
+    for provider in Provider::ALL {
+        let (base, bodies) = serve_turns(vec![
+            two_tool_calls().for_provider(provider),
+            answer.for_provider(provider),
+        ])
+        .await;
+        let mut session = build(provider, base);
+
+        let first = session
+            .next(TurnInput::User {
+                content: "go".into(),
+            })
+            .await
+            .unwrap();
+        let events = first.try_collect::<Vec<_>>().await.unwrap();
+        let (_, calls, _) = shape(&events);
+        assert_eq!(calls.len(), 2, "{}", provider.name());
+
+        let results = vec![
+            gyr_protocol::ToolResult {
+                call_id: "t1".into(),
+                output: gyr_protocol::ToolOutput::success("contents of a"),
+            },
+            gyr_protocol::ToolResult {
+                call_id: "t2".into(),
+                output: gyr_protocol::ToolOutput::error("b is missing"),
+            },
+        ];
+        let second = session
+            .next(TurnInput::ToolResults { results })
+            .await
+            .unwrap();
+        let _ = second.try_collect::<Vec<_>>().await.unwrap();
+
+        let sent = bodies.await.unwrap();
+        assert_eq!(sent.len(), 2, "{}", provider.name());
+        let request = &sent[1];
+
+        for (id, output) in [("t1", "contents of a"), ("t2", "b is missing")] {
+            assert!(
+                request.contains(id),
+                "{}: call id {id} never reached the next request",
+                provider.name()
+            );
+            assert!(
+                request.contains(output),
+                "{}: output for {id} never reached the next request",
+                provider.name()
+            );
+        }
     }
 }
