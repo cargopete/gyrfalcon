@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | implemented M5 |
+| Status | implemented M5; withdrawn from the default tool set M11 |
 | Date | 2026-08-27 |
 | Depends on | RFC-0001, RFC-0005, RFC-0008 |
 | Scope | diagnostic identity, batch progress, the definition of done |
@@ -179,7 +179,49 @@ endpoint over a two-error fixture, with the sandbox in force: `gate start`,
 down to one, one file changed by minus four bytes, and "Fewer distinct errors
 than at the last check. Keep going."
 
-## 10. Open questions
+## 10. Withdrawn, 2026-08-27
+
+**The gate is no longer offered.** The code stays, the tests stay, this document
+stays. It is not in the tool set a session is given and it is not in the system
+prompt.
+
+Section 12.1.4 measured it against `cargo check` on a four-file case and found
+no difference. The objection was that four files is not where a progress tracker
+earns its keep, so RFC-0012 built `wide-cascade`: twenty-nine modules, a `Copy`
+removal cascading into four of them, invisible in the source, too many files to
+read whole.
+
+| arm | turns | input tokens |
+|---|---:|---:|
+| with the gate | 10 | 52,271 |
+| without it | **8** | **43,711** |
+
+Identical reads, identical patches, identical result. `cargo check` filled the
+gate's slot exactly, and the run was two turns and 8,560 tokens shorter without
+it.
+
+**The mechanism is understood, which is why this is a conclusion rather than a
+data point.** A compiler error names its file. `regressing` tells a model
+nothing about *where* that `cargo check` has not already said, and locating the
+damage was the entire job in this case. The gate's distinctive information is a
+comparison against a baseline, and a model about to read four files does not
+need to be told the count first.
+
+What is still untested is `stalled` and `exhausted` on a batch that genuinely
+fails to converge. Both live sightings of `stalled` were artefacts of a baseline
+taken after the work rather than before it, which is a mis-ordering and not a
+stall. Constructing a real one means finding a task a competent model fails at
+repeatedly, and after nine cases I have not managed it.
+
+So: kept, because that case may yet be written and the code is correct. Not
+offered, because every measurement so far says it costs turns and tokens and
+changes nothing. Putting it back is one line in `gyr_eval::session_tools`.
+
+Building something, arguing for it, measuring it twice and then withdrawing it
+is the outcome this repository's method is supposed to produce. It is not a
+pleasant one.
+
+## 11. Open questions
 
 - Whether `exhausted` should be two consecutive checks or a ratio over the
   batch. RFC-0012 records every gate verdict per case, so this is now a query

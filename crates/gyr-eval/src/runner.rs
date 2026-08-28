@@ -25,7 +25,6 @@ use gyr_protocol::ToolCall;
 use gyr_protocol::ToolDefinition;
 use gyr_rust::CargoLimits;
 use gyr_rust::CargoTool;
-use gyr_rust::GateTool;
 use gyr_sandbox::Sandbox;
 use gyr_tools::ToolLimits;
 use gyr_tools::WorkspaceTools;
@@ -116,7 +115,7 @@ pub async fn run_case(
     let before = fingerprint_tree(&workspace)?;
 
     let tools = Without {
-        inner: build_tools(&workspace, Arc::clone(&sandbox))?,
+        inner: session_tools(&workspace, Arc::clone(&sandbox))?,
         hidden: without.iter().cloned().collect(),
     };
     let definitions = tools.definitions();
@@ -196,7 +195,19 @@ pub async fn run_case(
     })
 }
 
-fn build_tools(workspace: &Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet, EvalError> {
+/// The tools a session gets, for the harness and for the executable alike.
+///
+/// It lives here rather than in `gyr-cli` because a library cannot depend on a
+/// binary, and it must live in exactly one place: a corpus that measured a
+/// different tool surface from the one the product ships would be measuring
+/// nothing anyone uses. That is not hypothetical. Removing the gate from the
+/// executable left it in the harness, and the next eval run still reported the
+/// gate being called.
+///
+/// # Errors
+///
+/// Returns [`EvalError::Setup`] when a tool cannot be built for this workspace.
+pub fn session_tools(workspace: &Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet, EvalError> {
     let setup = |error: gyr_core::ToolError| EvalError::Setup(error.to_string());
     let mut runtimes: Vec<Box<dyn ToolRuntime>> = vec![
         Box::new(WorkspaceTools::new(workspace, ToolLimits::default()).map_err(setup)?),
@@ -205,12 +216,9 @@ fn build_tools(workspace: &Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet, E
         ),
     ];
     if workspace.join("Cargo.toml").is_file() {
+        // The gate is deliberately absent. RFC-0011 section 13.
         runtimes.push(Box::new(
-            CargoTool::new(workspace, CargoLimits::default(), Arc::clone(&sandbox))
-                .map_err(setup)?,
-        ));
-        runtimes.push(Box::new(
-            GateTool::new(workspace, CargoLimits::default(), sandbox).map_err(setup)?,
+            CargoTool::new(workspace, CargoLimits::default(), sandbox).map_err(setup)?,
         ));
     }
     ToolSet::new(runtimes).map_err(setup)

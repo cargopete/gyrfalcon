@@ -27,7 +27,7 @@ CI and evals.
   Chat Completions, each keeping its own conversation state so continuation does
   not lose reasoning items or content ordering. Recorded parser tests
   throughout; Qwen and Anthropic also have local HTTP/SSE wire tests.
-- **Seven tools.** `read` returns bounded, numbered, fingerprinted ranges.
+- **Six tools.** `read` returns bounded, numbered, fingerprinted ranges.
   `search` is literal and ignore-aware with explicit totals. `list` shows what
   is in the workspace, through the same ignore rules, so a listing is not mostly
   build output. `apply_patch` replaces one exact occurrence and refuses a stale
@@ -35,14 +35,13 @@ CI and evals.
   runs a closed set of subcommands and returns parsed diagnostics, so an `E0308`
   arrives as a level, a code, a file, a line and a column rather than as a page
   of compiler output.
-- **A diagnostic gate**, which is the part that makes this a Rust agent rather
-  than a general one. A multi-site Rust change passes through a state that does
-  not compile, so the question after each edit is not "does it build" but "is
-  the distinct error set shrinking". `gate start` takes a baseline, `gate check`
-  returns a verdict: improving, regressing, stalled, exhausted, green, or
-  `unchanged` for a build that is green because nothing was touched. That last
-  one exists because a green build with no material diff is somebody else's
-  success, and a model should have to look at a field that says so.
+- **A diagnostic gate, built and then withdrawn.** It tracked whether an edit
+  batch was converging, and two ablations at two workspace sizes found it cost
+  turns and tokens and changed no outcome: `cargo check` already names the
+  failing files, so its verdict added nothing about *where*. On the case built
+  to be its best scenario, removing it made the run two turns and 8,560 tokens
+  shorter. The code and RFC-0011 stay; it is not in the tool set. That is the
+  method working, and it is not a pleasant result.
 - **Approval enforced below the model.** Every call is classified read-only,
   mutating or process. Read-only calls proceed. Anything else asks, and a
   session rule is keyed on the tool and the resolved target, never on a
@@ -132,10 +131,16 @@ section 2 of RFC-0014 argues cannot be done honestly. Context relief for
 OpenAI, whose server-side continuation keeps nothing local to reduce, and which
 wants a live credential to verify rather than merely to write.
 
-The eval corpus is eight cases long, which is a start rather than a corpus. All
-eight pass against `claude-sonnet-5`, the six-case sweep costing about
-twenty-seven pence a run. It has now been used to settle an argument about
-Gyrfalcon's own design as well as to measure a model.
+The eval corpus is nine cases long, which is a start rather than a corpus. All
+nine pass against `claude-sonnet-5`. It has been used to settle several
+arguments about Gyrfalcon's own design, including one that ended with a tool
+being taken out again.
+
+The newest case is the one that made the others readable: twenty-nine modules
+where removing `Copy` breaks four, with nothing in any source saying which. Every
+earlier finding carried the caveat that its fixture was under ten files, and this
+is where `search` finally earned its place — without it the run cost 41% more and
+the model reached for `exec grep`.
 
 It has already changed this repository's mind twice, both times about Gyrfalcon
 rather than about any model.

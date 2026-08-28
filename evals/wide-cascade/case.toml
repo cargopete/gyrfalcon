@@ -1,0 +1,41 @@
+name = "wide-cascade"
+prompt = """
+Give `Sample` a public `label: String` field, defaulting to an empty string in \
+`Sample::new`. `Sample` must not derive `Copy` afterwards and you must not add \
+it back. Fix whatever that breaks, keep every public function signature exactly \
+as it is, and leave alone any module that does not need to change. `cargo check` \
+must be clean when you are done.
+"""
+max_turns = 30
+
+# Twenty-nine modules, of which four rely on an implicit copy. Nothing in their
+# source says so: `samples[index]` looks the same in a module that breaks and one
+# that does not. Reading all twenty-nine costs thirty tool calls, so this is the
+# first case in the corpus where reading everything first is a real expense.
+[expect]
+cargo_check = "clean"
+files_changed = [
+  "src/sample.rs",
+  "src/peak.rs",
+  "src/pairs.rs",
+  "src/duplicated.rs",
+  "src/head.rs",
+]
+# A sample of the twenty-four that borrow. Editing these would be a scattergun
+# fix that happened to compile.
+files_unchanged = [
+  "Cargo.toml",
+  "src/lib.rs",
+  "src/total.rs",
+  "src/count.rs",
+  "src/report.rs",
+  "src/describe_all.rs",
+]
+
+[[expect.contains]]
+file = "src/sample.rs"
+text = "label: String"
+
+[[expect.not_contains]]
+file = "src/sample.rs"
+text = "Copy"

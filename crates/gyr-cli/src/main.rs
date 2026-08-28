@@ -37,19 +37,12 @@ use gyr_core::resume;
 use gyr_core::session::JsonlSessionLog;
 use gyr_core::session::SessionId;
 use gyr_core::session::SessionMeta;
-use gyr_exec::ExecLimits;
-use gyr_exec::ExecTool;
 use gyr_model::ModelSession;
 use gyr_model::builtin_profiles;
 use gyr_protocol::ProfileStatus;
 use gyr_protocol::StopReason;
 use gyr_protocol::ToolDefinition;
-use gyr_rust::CargoLimits;
-use gyr_rust::CargoTool;
-use gyr_rust::GateTool;
 use gyr_sandbox::Sandbox;
-use gyr_tools::ToolLimits;
-use gyr_tools::WorkspaceTools;
 use tokio_util::sync::CancellationToken;
 
 use crate::approve::TerminalApprover;
@@ -243,31 +236,10 @@ fn print_prompt(args: &PromptArgs) -> Result<()> {
 
 /// The tools one session offers.
 ///
-/// The Cargo tool is present only where a manifest is, so a workspace that is
-/// not a Cargo project simply has fewer tools rather than one that fails on
-/// every call.
+/// Deferred to `gyr-eval` so the corpus and the executable cannot drift. They
+/// did drift once, for exactly one commit, and the eval run said so.
 fn tool_set(workspace: &Path, sandbox: Arc<dyn Sandbox>) -> Result<ToolSet> {
-    let mut runtimes: Vec<Box<dyn ToolRuntime>> = vec![
-        Box::new(
-            WorkspaceTools::new(workspace, ToolLimits::default())
-                .map_err(|error| anyhow::anyhow!("{error}"))?,
-        ),
-        Box::new(
-            ExecTool::new(workspace, ExecLimits::default(), Arc::clone(&sandbox))
-                .map_err(|error| anyhow::anyhow!("{error}"))?,
-        ),
-    ];
-    if workspace.join("Cargo.toml").is_file() {
-        runtimes.push(Box::new(
-            CargoTool::new(workspace, CargoLimits::default(), Arc::clone(&sandbox))
-                .map_err(|error| anyhow::anyhow!("{error}"))?,
-        ));
-        runtimes.push(Box::new(
-            GateTool::new(workspace, CargoLimits::default(), sandbox)
-                .map_err(|error| anyhow::anyhow!("{error}"))?,
-        ));
-    }
-    ToolSet::new(runtimes).map_err(|error| anyhow::anyhow!("{error}"))
+    gyr_eval::session_tools(workspace, sandbox).map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn prompt_context(
